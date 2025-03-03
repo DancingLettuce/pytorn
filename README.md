@@ -1,5 +1,5 @@
 # pytorn
-python+torn
+python torn
 
 Torn City https://www.torn.com/index.php
 
