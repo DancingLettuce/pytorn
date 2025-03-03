@@ -1,0 +1,577 @@
+import argparse
+import sys
+import json
+from pathlib import Path
+import requests
+from datetime import datetime
+import sqlite3
+
+parser = argparse.ArgumentParser()
+parser.add_argument("-api", "--apikey", help="api key")
+parser.add_argument("--reloadreference", action="store_true",  help="Reload and rebuild the reference tables Item, Logtype, LogCategory.")
+parser.add_argument("--truncateplayerprofile", action="store_true",  help="Delete and re-create the playerprofile table.")
+
+args = parser.parse_args()
+secrets = {}
+apiurl = 'https://api.torn.com/v2/'
+dbcon = sqlite3.connect('pytorn.db')
+
+def get_api(section, selections='', cat='', ts_to='', ts_from='', id=''):
+    # ts_to = timestamp to, ts_from = timestamp from
+    apiendpoint = (apiurl + section + 
+        ((('?selections=' + selections ) if selections else '') + 
+        (('&cat=' + cat ) if cat else '') + 
+        (('&to=' + ts_to ) if ts_to else '')  + 
+        (('&from=' + ts_from ) if ts_from else '') ) +
+        (('&id=' + id ) if id else '') 
+        )
+    headers = {'Authorization':'ApiKey '+ secrets['apikey']}
+    response = requests.get(apiendpoint, headers = headers)
+    meme = response.json()
+    return meme
+    
+def flatten_json(y,cleankey=False, delimiter = '.'):
+    out = {}
+    def flatten(x, name=''):
+        if type(x) is dict:
+            for a in x:
+                flatten(x[a], name + a + delimiter)
+        elif type(x) is list:
+            i = 0
+            for a in x:
+                flatten(a, name + str(i) + delimiter)
+                i += 1
+        else:
+            if cleankey:
+                name = name.replace('_','')
+            if len(delimiter) >0:
+                out[name[:-len(delimiter)]] = x
+            else:
+                out[name] = x
+
+    flatten(y)
+    return out
+
+def print_flush(message):
+    """Print a string and do not move the cursor for progress-type displays"""
+    message = message + (' ' * 80)
+    message = message[:80]
+    print ( f"{message }", end= "\r", flush=True )
+    #print ( f"{message } {' ' * 80 }", end= "\r", flush=True )
+    
+def get_me():
+    section = 'user'
+    selections = 'basic'
+    apiendpoint = apiurl + section + '?' + 'selections=' + selections
+    headers = {'Authorization':'ApiKey '+ secrets['apikey']}
+    response = requests.get(apiendpoint, headers = headers)
+    meme = response.json() 
+    print(meme['name'])
+    print(meme)
+
+def get_log():
+    res=get_api(section='user',selections='log')
+    return res
+
+def timestamptodate(ts):
+    if ts:
+        return datetime.fromtimestamp(ts).isoformat()
+    else:
+        return None
+
+def get_log_createevnet():
+    accountcreatelog=get_api(section='user',selections='log', cat='1')
+    #https://api.torn.com/v2/user?selections=log&cat=1
+    accountcreationevent = None
+    for key, values in accountcreatelog['log'].items():
+        if values.get('title') == 'Created account':
+            accountcreationevent = values.get('timestamp','')
+    if not accountcreationevent:
+        print("ERROR: Can't find the account creation event")
+        return None
+    return accountcreatelog
+    print(accountcreationevent)
+    print(timestamptodate(accountcreationevent))
+
+def savesecrets():
+    secretfile = 'secrets.json'
+    with open(secretfile, 'w') as ff:
+        json.dump(secrets, ff)
+
+def checkinit():
+    global secrets
+    ischeck = False
+    if args.apikey:
+        secrets['apikey'] = args.apikey
+        savesecrets()
+        return True
+    else:
+        secretfile = 'secrets.json'
+        secretfilep = Path(secretfile)
+        if not secretfilep.is_file():
+            print("ERROR: there is no API key. Initialise with the --apikey argument.")
+            return False
+        try:
+            with open(secretfile, 'r') as ff:
+                secrets = json.load(ff)
+        except Exception as e:
+            print(f"ERROR: Cannot load secrets {e}")
+            return False
+        try:
+            if not secrets['apikey']:
+                print(f"ERROR: Apikey not found in secrets")
+                return False
+        except Exception as e:
+            print(f"ERROR: apikey not found in secrets {e}")
+            return False
+    return True
+
+def init_database():
+    
+    # sqlite viewer online https://inloop.github.io/sqlite-viewer/
+    
+    if args.truncateplayerprofile:
+        dbcon.execute("DROP TABLE playerprofile")
+    if args.reloadreference:
+        dbcon.execute("DROP TABLE item")
+        dbcon.execute("DROP TABLE logtype")
+        dbcon.execute("DROP TABLE logcategory")
+    #dbcon.execute("DROP TABLE userlog")
+    dbcon.execute("""CREATE TABLE IF NOT EXISTS userlog (id INTEGER PRIMARY KEY, log_id TEXT UNIQUE, log_type TEXT, title TEXT, 
+        timestamp INTEGER, torndatetime TEXT,
+        data TEXT, params TEXT )""")
+    dbcon.execute("""CREATE TABLE IF NOT EXISTS logtype (id INTEGER PRIMARY KEY, log_id INTEGER UNIQUE, title TEXT )""")
+    dbcon.execute("""CREATE TABLE IF NOT EXISTS logcategory (id INTEGER PRIMARY KEY, log_id INTEGER UNIQUE, title TEXT )""")
+    dbcon.execute("""CREATE TABLE IF NOT EXISTS item (id INTEGER PRIMARY KEY, updated_on TEXT, 
+        item_id INTEGER UNIQUE, name TEXT ,
+        description TEXT, effect TEXT, requirement TEXT, type TEXT ,
+        sub_type TEXT, is_masked TEXT, is_tradable TEXT, 
+        is_found_in_city TEXT, vendor_country TEXT, vendor_name TEXT, 
+        buy_price INTEGER, sell_price INTEGER, market_price INTEGER,
+        circulation INTEGER, category TEXT, stealth_level INTEGER )""")
+    res = get_cur(sql='SELECT count(*) FROM logtype').fetchone()
+    rowcount = 0
+    if res[0] == 0:
+        print(f"Getting logtype from the Torn API.")
+        res = get_api(section='torn/logtypes')
+        sql = 'INSERT OR IGNORE INTO logtype (log_id, title) values (?,?)'
+        cur = dbcon.cursor()
+        rowcount = 0
+        for value in res['logtypes']:
+            rowcount += 1
+            print_flush(f"{rowcount} {value['title']}")
+            cur.execute(sql, ( 
+            value['id'], value['title']
+            ))
+        print()
+        dbcon.commit()
+    res = get_cur(sql='SELECT count(*) FROM logcategory').fetchone()
+    if res[0] == 0:
+        print(f"Getting logcategories from the Torn API.")
+        res = get_api(section='torn/logcategories')
+        sql = 'INSERT OR IGNORE INTO logcategory (log_id, title) values (?,?)'
+        cur = dbcon.cursor()
+        rowcount = 0
+        for value in res['logcategories']:
+            rowcount += 1
+            print_flush(f"{rowcount} {value['title']}")
+            cur.execute(sql, (
+            value['id'], value['title']
+            ))
+        print()
+        dbcon.commit()
+    res = get_cur(sql='SELECT count(*) FROM item').fetchone()
+    if res[0] == 0:
+        print(f"Getting items from the Torn API.")
+        res = get_api(section='torn/items')
+        sql = """INSERT OR IGNORE INTO item (item_id, updated_on, 
+            name, description, effect, 
+            requirement , type ,
+            sub_type , is_masked, is_tradable , 
+            is_found_in_city , vendor_country , vendor_name , 
+            buy_price , sell_price , market_price ,
+            circulation , category , stealth_level ) 
+            values (?,?,
+                ?,?,?,
+                ?,?,
+                ?,?,?,
+                ?,?,?,
+                ?,?,?,
+                ?,?,?
+                )"""
+        cur = dbcon.cursor()
+        rowcount = 0
+        for value in res['items']:
+            rowcount += 1
+            print_flush(f"{rowcount} {value['name']}")
+            value_param = []
+            value_param.append(value['id'])
+            value_param.append(datetime.now().isoformat())
+            value_param.append(value['name'])
+            value_param.append(value['description'])
+            value_param.append(value['effect'])
+            value_param.append(value['requirement'])
+            value_param.append(value['type'])
+            value_param.append(value['sub_type'])
+            value_param.append(value['is_masked'])
+            value_param.append(value['is_tradable'])
+            value_param.append(value['is_found_in_city'])
+            if value.get('value',None) is not None:
+                if value['value'].get('vendor', None) is not None:
+                    value_param.append(value['value']['vendor'].get('country',''))
+                else:
+                    value_param.append(None)
+            else:
+                value_param.append(None)
+            if value.get('value',None) is not None:
+                if value['value'].get('vendor', None) is not None:
+                    value_param.append(value['value']['vendor'].get('name',''))
+                else:
+                    value_param.append(None)
+            else:
+                value_param.append(None)
+            value_param.append(value.get('value',{}).get('buy_price',None))
+            value_param.append(value.get('value',{}).get('sell_price',None))
+            value_param.append(value.get('value',{}).get('market_price',None))
+            value_param.append(value['circulation'])
+            if value.get('details',None) is not None:
+                value_param.append(value['details'].get('category',''))
+                value_param.append(value['details'].get('stealth_level',''))
+            else:
+                value_param.append(None)
+                value_param.append(None)
+            # 419 = small sc
+            # 1086 = driver l
+            cur.execute(sql, value_param)
+            #value['id'], datetime.now().isoformat(),
+            #value['name'], value['description'], value['effect'],
+            #value['requirement'],value['type'],
+            #value['sub_type'],value['is_masked'],value['is_tradable'],
+            #value['is_found_in_city'],value.get('value',{}).get('vendor',{}).get('country',''), value.get('value',{}).get('vendor',{}).get('name',''),
+            #value.get('value',{}).get('buy_price',None),value.get('value',{}).get('sell_price',None), value.get('value',{}).get('market_price',None),
+            #value['circulation'], value['details']['category'], value['details']['stealth_level']
+            #))
+        print()
+        dbcon.commit()
+
+    dbcon.execute("""CREATE TABLE IF NOT EXISTS playerprofile (id INTEGER PRIMARY KEY, 
+        attackingattackswon INTEGER,
+        attackingattackslost INTEGER,
+        attackingdefendswon INTEGER,
+        attackingdefendslost INTEGER,
+        attackingdefendstotal INTEGER,
+        attackinghighestlevelbeaten INTEGER,
+        attackingkillstreakbest INTEGER,
+        attackingkillstreakcurrent INTEGER,
+        attackinghitssuccess INTEGER,
+        attackinghitsmiss INTEGER,
+        attackinghitscritical INTEGER,
+        attackinghitsonehitkills INTEGER,
+        attackingdamagetotal INTEGER,
+        attackingdamagebest INTEGER,
+        attackingnetworthmoneymugged INTEGER,
+        attackingnetworthlargestmug INTEGER,
+        attackingammunitiontotal INTEGER,
+        jobsjobpointsused INTEGER,
+        jobstrainsreceived INTEGER,
+        tradingitemsboughtmarket INTEGER,
+        tradingitemsboughtshops INTEGER,
+        tradingpointsbought INTEGER,
+        tradingpointssold INTEGER,
+        tradingbazaarcustomers INTEGER,
+        tradingbazaarsales INTEGER,
+        tradingbazaarprofit INTEGER,
+        hospitaltimeshospitalized INTEGER,
+        hospitalmedicalitemsused INTEGER,
+        hospitalbloodwithdrawn INTEGER,
+        crimesoffensestotal INTEGER,
+        crimesskillssearchforcash INTEGER,
+        crimesskillsbootlegging INTEGER,
+        crimesskillsgraffiti INTEGER,
+        crimesskillsshoplifting INTEGER,
+        crimesskillspickpocketing INTEGER,
+        crimesskillscardskimming INTEGER,
+        crimesskillsburglary INTEGER,
+        crimesskillshustling INTEGER,
+        crimesskillsdisposal INTEGER,
+        crimesskillscracking INTEGER,
+        crimesskillsforgery INTEGER,
+        crimesskillsscamming INTEGER,
+        bountiesplacedamount INTEGER,
+        bountiesplacedvalue INTEGER,
+        bountiescollectedamount INTEGER,
+        bountiescollectedvalue INTEGER,
+        bountiesreceivedamount INTEGER,
+        bountiesreceivedvalue INTEGER,
+        itemsusedbooks INTEGER,
+        itemsusedboosters INTEGER,
+        itemsusedconsumables INTEGER,
+        itemsusedcandy INTEGER,
+        itemsusedalcohol INTEGER,
+        itemsusedenergy INTEGER,
+        itemsusedenergydrinks INTEGER,
+        itemsusedstatenhancers INTEGER,
+        itemsusedeastereggs INTEGER,
+        itemsvirusescoded INTEGER,
+        traveltotal INTEGER,
+        traveltimespent INTEGER,
+        travelitemsbought INTEGER,
+        travelattackswon INTEGER,
+        traveldefendslost INTEGER,
+        drugscannabis INTEGER,
+        drugsecstasy INTEGER,
+        drugsketamine INTEGER,
+        drugslsd INTEGER,
+        drugsopium INTEGER,
+        drugspcp INTEGER,
+        drugsshrooms INTEGER,
+        drugsspeed INTEGER,
+        drugsvicodin INTEGER,
+        drugsxanax INTEGER,
+        drugstotal INTEGER,
+        drugsoverdoses INTEGER,
+        drugsrehabilitationsamount INTEGER,
+        drugsrehabilitationsfees INTEGER,
+        networthtotal INTEGER,
+        otheractivitytime INTEGER,
+        otheractivitystreakcurrent INTEGER,
+        otheractivitystreakbest INTEGER,
+        othermeritsbought INTEGER,
+        otherrefillsenergy INTEGER,
+        otherrefillsnerve INTEGER,
+        otherrefillstoken INTEGER,
+        otherdonatordays INTEGER,
+        level INTEGER,
+        honor INTEGER,
+        signup TEXT,
+        awards INTEGER,
+        friends INTEGER,
+        enemies INTEGER,
+        age INTEGER,
+        donator INTEGER,
+        playerid INTEGER UNIQUE,
+        name TEXT,
+        revivable INTEGER,
+        lifecurrent INTEGER,
+        lifemaximum INTEGER,
+        statusdescription TEXT,
+        statusdetails TEXT,
+        statusstate TEXT,
+        statusuntil INTEGER,
+        jobcompanyid INTEGER,
+        jobcompanyname TEXT,
+        jobcompanytype TEXT,
+        factionfactionid INTEGER,
+        factiondaysinfaction INTEGER,
+        factionfactionname TEXT,
+        marriedspouseid TEXT,
+        marriedspousename TEXT,
+        stateshospitaltimestamp INTEGER,
+        statesjailtimestamp INTEGER,
+        lastactionstatus TEXT,
+        lastactiontimestamp INTEGER,
+        lastactionrelative TEXT,
+        profileupdateon TEXT,
+        statsupdatedon TEXT,
+        playerlastinteraction TEXT
+    )""")
+
+def get_cur(sql, args=None):
+    cur = dbcon.cursor()
+    if args:
+        return(cur.execute(sql, args))
+    else:    
+        return(cur.execute(sql))
+
+def get_cur_list(sql):
+    cur = dbcon.cursor()
+    #cur.row_factory = lambda cursor, row: {field: row[0]}
+    #cur.row_factory = sqlite3.Row
+    cur.row_factory = lambda cursor, row: row[0]
+    return(cur.execute(sql).fetchall())
+
+def writelogtodb(thelog):
+        fieldnames = get_cur_list(sql="SELECT name FROM PRAGMA_TABLE_INFO('userlog')")
+        sql1 = 'INSERT OR IGNORE INTO userlog (log_id, log_type, title, timestamp, torndatetime, data, params'
+        sql2 = ' values (?,?,?,?,?,?,?'
+        cur = dbcon.cursor()
+        rowcount = 0
+        for key, value in thelog['log'].items():
+            plog = playerlog(value)
+            profile = playerprofile(plog.get_playerid())
+            rowcount += 1
+            print_flush(f"{rowcount} {timestamptodate(value['timestamp'])} {value['title']}")
+            sql3 = sql1
+            sql4 = sql2
+            theparams = [key, 
+                value['log'], value['title'],
+                value['timestamp'], timestamptodate(value['timestamp']), 
+                json.dumps(value['data']), 
+                json.dumps(value['params'])]
+            for datakey, datavalue in value['data'].items():
+                datakey += '_'
+                if type(datavalue) is list:
+                    datavalue =  str(datavalue)
+                sql3 += ',' + datakey
+                sql4 += ',?'
+                theparams.append(datavalue)
+                if datakey not in fieldnames:
+                    dbcon.execute('ALTER TABLE userlog ADD ' + datakey + ' TEXT')
+                    fieldnames.append(datakey)
+            sql3 += ') ' + sql4 + ')'
+            cur.execute(sql3, theparams)
+        dbcon.commit()
+
+def main():
+    if not checkinit():
+        print("Error. Stopped")
+        sys.exit()
+    init_database()
+    max_timestamp = None
+    min_timestamp = None
+    logtypes = []
+    res = get_cur(sql='SELECT MAX(timestamp) as max_timestamp, MIN(timestamp) as min_timestamp, count(*) FROM userlog').fetchone()
+    max_timestamp = res[0]
+    min_timestamp = res[1]
+    logrowcount = res[2]
+    maxcount=5
+    itercount = 0
+
+    if max_timestamp is None:
+        print('No downloaded userlog. Getting lastest log')    
+        writelogtodb( get_log() )
+        res = get_cur(sql='SELECT MAX(timestamp) as max_timestamp, MIN(timestamp) as min_timestamp, count(*) FROM userlog').fetchone()
+        max_timestamp = res[0]
+        min_timestamp = res[1]
+        logrowcount = res[2]
+        print()
+        print(f'Latest log entry {max_timestamp} {timestamptodate(max_timestamp)}')
+        print(f'Earliest log entry {min_timestamp} {timestamptodate(min_timestamp)}')
+        print(f'Total log rows {logrowcount} ')
+    else:
+        print("A log exists in the local database")
+        print(f'Latest log entry {max_timestamp} {timestamptodate(max_timestamp)}')
+        print(f'Earliest log entry {min_timestamp} {timestamptodate(min_timestamp)}')
+        print(f'Total log rows {logrowcount} ')
+        reslogcount = 0
+        reslog = get_api(section='user',selections='log', ts_from=str(max_timestamp +1))
+        
+        while reslog['log']:
+            reslogcount += 1
+            print(f"{reslogcount} Getting next log batch from {max_timestamp} ({timestamptodate(max_timestamp + 1)})")
+            writelogtodb( reslog )
+            res = get_cur(sql='SELECT MAX(timestamp) as max_timestamp, MIN(timestamp) as min_timestamp, count(*) FROM userlog').fetchone()
+            max_timestamp = res[0]
+            min_timestamp = res[1]
+            logrowcount = res[2]
+            print(f"The latest timestamp is {max_timestamp} ({timestamptodate(max_timestamp)}, the numer of rows is {logrowcount})")
+            reslog = get_api(section='user',selections='log', ts_from=str(max_timestamp + 1))
+            if reslogcount > 10:
+                print('Halting...')
+                sys.exit()
+    print("Complete.")
+
+def flattenjson():
+    jsonfields = []
+    n=0
+    for key, values in thelog['log'].items():
+        n+=1
+        print(f"{n} {key}")
+        for key in flatten_json(values).keys():
+            if not key in jsonfields:
+                jsonfields.append(key)
+    print(f"The keys are {jsonfields}")
+
+
+class playerprofile:
+    playerattribute = {}
+    playerid = None
+    existsdb = None
+    profilejson = None
+    fieldnames = None
+    profile_age = None    
+    def __init__(self, playerid):
+        if playerid is not None:
+            self.playerid = playerid
+            if not self.exists_db():
+                self.insertplayerid()
+            if not self.profile_isrecent():
+                self.getapi_playerprofile()
+    def exists_db(self):
+        if self.existsdb is None:
+            print(self.playerid)
+            res = get_cur(sql='SELECT (julianday(current_timestamp) -julianday(profileupdateon)) * 24 * 60  FROM playerprofile WHERE playerid=?',args=(self.playerid ,)).fetchone()
+            if res is not None:
+                self.existsdb = True
+                self.profile_age = res[0]
+            else:
+                self.existsdb = False
+        return self.existsdb    
+    def get_profile_age(self):
+        self.exists_db()
+        return self.profile_age
+    def profile_isrecent(self):
+        if self.profile_age is None:
+            return False
+        elif self.profile_age < 30:
+            return True
+        return False
+    def insertplayerid(self):
+        timestampnow_iso = datetime.now().isoformat()
+        cur = dbcon.cursor()
+        cur.execute('INSERT OR IGNORE INTO playerprofile (playerid) VALUES (?)', (self.playerid, ) )
+        dbcon.commit()
+    def getapi_playerprofile(self):
+        print(f"Getting playerprofile from API for {self.playerid}")
+        self.profilejson = get_api(section='user',selections='profile', id=str(self.playerid))
+        self.profilejson = flatten_json(self.profilejson,cleankey=True, delimiter='')
+        # this is why ORMs like Alchemy or Django exist
+        timestampnow_iso = datetime.now().isoformat()
+        sql = "UPDATE playerprofile SET profileupdateon = ? ,"
+        params = [timestampnow_iso,]
+        for key, value in self.profilejson.items():
+            if key in self.get_fieldnames():
+                if key in ('playerid',):
+                    continue
+                sql += f" {key} = ? ,"
+                params.append(value)
+        sql = sql[:-1]
+        params.append(self.playerid)
+        sql += " WHERE  playerid = ?"
+        cur = dbcon.cursor()
+        cur.execute(sql, params )
+        dbcon.commit()
+        print(sql)
+        print(params)
+    def get_fieldnames(self):
+        if not self.fieldnames:
+            self.fieldnames = get_cur_list(sql="SELECT name FROM PRAGMA_TABLE_INFO('playerprofile')")
+        return self.fieldnames
+
+class playerlog():
+    log_type = None
+    title = None
+    timestamp = None
+    timestamp_iso = None
+    data = None
+    params = None
+    def __init__(self, values):
+        self.log_type = values['log']
+        self.title = values['title']
+        self.timestamp = values['timestamp']
+        self.timestamp_iso = timestamptodate(self.timestamp)
+        self.data = values['data']
+        self.params = values['params']
+    def get_playerid(self):
+        if self.log_type == 1225: # bazaar buy
+            return self.data['seller']
+        else:
+            return None
+
+if __name__ == '__main__':
+    main()
+
+
+
+
+
