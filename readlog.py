@@ -7,29 +7,71 @@ from datetime import datetime
 import sqlite3
 
 parser = argparse.ArgumentParser()
-parser.add_argument("-api", "--apikey", help="api key")
+parser.add_argument("-api", "--apikey", help="Api key. Stored after first use")
 parser.add_argument("--reloadreference", action="store_true",  help="Reload and rebuild the reference tables Item, Logtype, LogCategory.")
 parser.add_argument("--truncateplayerprofile", action="store_true",  help="Delete and re-create the playerprofile table.")
+parser.add_argument("--itemstotrack", help="Comma separated item IDs to track. Stored after first use.")
+parser.add_argument("--nolog", action="store_true",  help="Skip checking the log and downloading")
+parser.add_argument("--getmarketprices", action="store_true",  help="Get the prices for the itemstotrack")
+parser.add_argument("--getplayerbyid",  help="Get the details for a specific playerid.  Comma delimit extra text to store in playerprofile.playerlastinteraction")
+parser.add_argument("--debug", action="store_true",  help="Show detailed tracing log")
+parser.add_argument("--debugsql", action="store_true",  help="Show SQLite execution")
 
 args = parser.parse_args()
 secrets = {}
 apiurl = 'https://api.torn.com/v2/'
 dbcon = sqlite3.connect('pytorn.db')
 
-def get_api(section, selections='', cat='', ts_to='', ts_from='', id=''):
+class debuglog():
+    debuglog = []
+    messagelog = []
+    def __init__(self, message=''):
+        if message:
+            print(message)
+    def debug(self, message):
+        if args.debug:
+            print('>' + message)
+            self.messagelog.append(message)
+    def message(self,message):
+        print(message)
+        self.messagelog.append(message)
+    def print_messagelog(self):
+        for line in self.messagelog:
+            print(line)
+
+dlog = debuglog()
+
+if args.debugsql:
+    # trace calls
+    dbcon.set_trace_callback(print)
+
+def get_api(section, selections='', cat='', ts_to='', ts_from='', id='', slug='', urlbreadcrumb=''):
     # ts_to = timestamp to, ts_from = timestamp from
     apiendpoint = (apiurl + section + 
-        ((('?selections=' + selections ) if selections else '') + 
+        (('/' + slug  ) if slug else '') + 
+        (('/' + urlbreadcrumb  ) if urlbreadcrumb else '') + 
+        '?' + 
+        ((('&selections=' + selections ) if selections else '') + 
         (('&cat=' + cat ) if cat else '') + 
         (('&to=' + ts_to ) if ts_to else '')  + 
         (('&from=' + ts_from ) if ts_from else '') ) +
         (('&id=' + id ) if id else '') 
         )
+    dlog.debug(f"Calling api {apiendpoint}")
     headers = {'Authorization':'ApiKey '+ secrets['apikey']}
     response = requests.get(apiendpoint, headers = headers)
     meme = response.json()
     return meme
     
+def get_api_v1(section='',selections=''):
+    apiurl_v1 = 'https://api.torn.com/'
+    apiendpoint = (apiurl_v1 + section + '/?' + 
+        (('&selections=' + selections ) if selections else '') + 
+        ('&key=' + secrets['apikey'] )  
+        )
+    response = requests.get(apiendpoint)
+    meme = response.json()
+    return meme
 def flatten_json(y,cleankey=False, delimiter = '.'):
     out = {}
     def flatten(x, name=''):
@@ -101,6 +143,26 @@ def savesecrets():
 def checkinit():
     global secrets
     ischeck = False
+    secretfile = 'secrets.json'
+    secretfilep = Path(secretfile)
+    if secretfilep.is_file():
+        try:
+            with open(secretfile, 'r') as ff:
+                secrets = json.load(ff)
+        except Exception as e:
+            print(f"ERROR: Cannot load secrets {e}")
+            return False
+    if args.apikey:
+        secrets['apikey'] = args.apikey
+    if args.itemstotrack:
+        secrets['itemstotrack'] = args.itemstotrack
+    if not secrets.get('apikey',None):
+        print("ERROR: there is no API key. Initialise with the --apikey argument.")
+        return False
+    savesecrets()
+    return True
+
+    return
     if args.apikey:
         secrets['apikey'] = args.apikey
         savesecrets()
@@ -127,9 +189,9 @@ def checkinit():
     return True
 
 def init_database():
-    
     # sqlite viewer online https://inloop.github.io/sqlite-viewer/
-    
+    # sqlite viewer with refresh https://sqliteviewer.app/#/pytorn.db/table/userlog/
+
     if args.truncateplayerprofile:
         dbcon.execute("DROP TABLE playerprofile")
     if args.reloadreference:
@@ -380,6 +442,7 @@ def get_cur(sql, args=None):
     cur = dbcon.cursor()
     if args:
         return(cur.execute(sql, args))
+
     else:    
         return(cur.execute(sql))
 
@@ -436,39 +499,58 @@ def main():
     logrowcount = res[2]
     maxcount=5
     itercount = 0
-
-    if max_timestamp is None:
-        print('No downloaded userlog. Getting lastest log')    
-        writelogtodb( get_log() )
-        res = get_cur(sql='SELECT MAX(timestamp) as max_timestamp, MIN(timestamp) as min_timestamp, count(*) FROM userlog').fetchone()
-        max_timestamp = res[0]
-        min_timestamp = res[1]
-        logrowcount = res[2]
-        print()
-        print(f'Latest log entry {max_timestamp} {timestamptodate(max_timestamp)}')
-        print(f'Earliest log entry {min_timestamp} {timestamptodate(min_timestamp)}')
-        print(f'Total log rows {logrowcount} ')
-    else:
-        print("A log exists in the local database")
-        print(f'Latest log entry {max_timestamp} {timestamptodate(max_timestamp)}')
-        print(f'Earliest log entry {min_timestamp} {timestamptodate(min_timestamp)}')
-        print(f'Total log rows {logrowcount} ')
-        reslogcount = 0
-        reslog = get_api(section='user',selections='log', ts_from=str(max_timestamp +1))
-        
-        while reslog['log']:
-            reslogcount += 1
-            print(f"{reslogcount} Getting next log batch from {max_timestamp} ({timestamptodate(max_timestamp + 1)})")
-            writelogtodb( reslog )
+    
+    if not args.nolog:
+        if max_timestamp is None:
+            print('No downloaded userlog. Getting lastest log')    
+            writelogtodb( get_log() )
             res = get_cur(sql='SELECT MAX(timestamp) as max_timestamp, MIN(timestamp) as min_timestamp, count(*) FROM userlog').fetchone()
             max_timestamp = res[0]
             min_timestamp = res[1]
             logrowcount = res[2]
-            print(f"The latest timestamp is {max_timestamp} ({timestamptodate(max_timestamp)}, the numer of rows is {logrowcount})")
-            reslog = get_api(section='user',selections='log', ts_from=str(max_timestamp + 1))
-            if reslogcount > 10:
-                print('Halting...')
-                sys.exit()
+            print()
+            print(f'Latest log entry {max_timestamp} {timestamptodate(max_timestamp)}')
+            print(f'Earliest log entry {min_timestamp} {timestamptodate(min_timestamp)}')
+            print(f'Total log rows {logrowcount} ')
+        else:
+            print("A log exists in the local database")
+            print(f'Latest log entry {max_timestamp} {timestamptodate(max_timestamp)}')
+            print(f'Earliest log entry {min_timestamp} {timestamptodate(min_timestamp)}')
+            print(f'Total log rows {logrowcount} ')
+            reslogcount = 0
+            reslog = get_api(section='user',selections='log', ts_from=str(max_timestamp +1))
+            while reslog['log']:
+                reslogcount += 1
+                print(f"{reslogcount} Getting next log batch from {max_timestamp} ({timestamptodate(max_timestamp + 1)})")
+                writelogtodb( reslog )
+                res = get_cur(sql='SELECT MAX(timestamp) as max_timestamp, MIN(timestamp) as min_timestamp, count(*) FROM userlog').fetchone()
+                max_timestamp = res[0]
+                min_timestamp = res[1]
+                logrowcount = res[2]
+                print(f"The latest timestamp is {max_timestamp} ({timestamptodate(max_timestamp)}, the numer of rows is {logrowcount})")
+                reslog = get_api(section='user',selections='log', ts_from=str(max_timestamp + 1))
+                if reslogcount > 10:
+                    print('Halting...')
+                    sys.exit()
+    
+    if args.getmarketprices:
+        #res = get_cur(sql="SELECT item_id, name, sell_price FROM item WHERE item_id in (?)",args= (secrets['itemstotrack'],))
+        res = get_cur(sql="SELECT item_id, name, sell_price FROM item WHERE item_id in (" + secrets['itemstotrack'] +")")
+        for row in res:
+            print(f"{row[0]} {row[1]} {row[2]}")
+
+    if args.getplayerbyid:
+        if args.getplayerbyid == 'me':
+            pp = playerprofile('me',forceapi=True)
+            print(f"""Player {pp.getattrib('name')}, level {pp.getattrib('level')}, age {pp.getattrib('age')} {pp.getattrib('statusdescription')} 
+            Attacks {pp.getattrib('attackingattackswon')}, Drugs {pp.getattrib('drugstotal')}, Xan {pp.getattrib('drugsxanax')}""")
+
+        else:
+            playerselection = (args.getplayerbyid + ',,').split(',')
+            pp = playerprofile(playerselection[0],forceapi=True)
+            print(f"""Player {pp.getattrib('name')}, level {pp.getattrib('level')}, age {pp.getattrib('age')} {pp.getattrib('statusdescription')} 
+            Attacks {pp.getattrib('attackingattackswon')}, Drugs {pp.getattrib('drugstotal')}, Xan {pp.getattrib('drugsxanax')}""")
+
     print("Complete.")
 
 def flattenjson():
@@ -490,16 +572,28 @@ class playerprofile:
     profilejson = None
     fieldnames = None
     profile_age = None    
-    def __init__(self, playerid):
-        if playerid is not None:
+    forceapi = False
+    personalstatsjson = None
+    def __init__(self, playerid = None, forceapi=False):
+        self.forceapi = forceapi
+        if playerid == 'me':
+            self.get_profile_me()
+            self.get_personalstats()
+        elif playerid is not None:
             self.playerid = playerid
             if not self.exists_db():
                 self.insertplayerid()
             if not self.profile_isrecent():
                 self.getapi_playerprofile()
+    def getattrib(self, value):
+        if self.profilejson.get(value,''):
+            return self.profilejson.get(value,'')
+        else:
+            return self.personalstatsjson.get(value,'')
+        return ''
     def exists_db(self):
         if self.existsdb is None:
-            print(self.playerid)
+            debuglog(self.playerid)
             res = get_cur(sql='SELECT (julianday(current_timestamp) -julianday(profileupdateon)) * 24 * 60  FROM playerprofile WHERE playerid=?',args=(self.playerid ,)).fetchone()
             if res is not None:
                 self.existsdb = True
@@ -507,27 +601,59 @@ class playerprofile:
             else:
                 self.existsdb = False
         return self.existsdb    
+    def get_personalstats_me(self):
+        # 'https://api.torn.com/v2/user/personalstats?cat=popular' -- my personal stats
+        # 'https://api.torn.com/v2/user/1326025/personalstats?cat=popular&stat=' -- player personal stats
+        dlog.message('Getting my personal stats from API')
+        self.personalstatsjson = get_api(section='user',selections='personalstats')
+
+    def get_personalstats(self):
+        # https://api.torn.com/v2/user/1326025/personalstats?cat=popular&stat=
+        dlog.message(f'Getting personal stats for {self.playerid} from API')
+        self.personalstatsjson = get_api(section='user',urlbreadcrumb='personalstats', slug=str(self.playerid), cat='popular')['personalstats']
+        self.personalstatsjson = flatten_json(self.personalstatsjson,cleankey=True, delimiter='')
+        dlog.debug(f'Player personalstats json {self.personalstatsjson}')
+        self.update_playerprofile()
+    def get_profile_me(self):
+        # 'https://api.torn.com/v2/user?selections=profile' -- my profile
+        dlog.message('Getting my profile from API')
+        self.profilejson = get_api(section='user',selections='profile')
+        self.profilejson = flatten_json(self.profilejson,cleankey=True, delimiter='')
+        
+        dlog.debug(f'my profile json {self.profilejson}')
+        self.playerid = self.getattrib('playerid')
+        dlog.debug(f"My playerid = {self.playerid}")
+        self.insertplayerid()
+        self.update_playerprofile()
     def get_profile_age(self):
         self.exists_db()
         return self.profile_age
     def profile_isrecent(self):
+        if self.forceapi:
+            return False
         if self.profile_age is None:
             return False
         elif self.profile_age < 30:
             return True
         return False
     def insertplayerid(self):
+        sql='INSERT OR IGNORE INTO playerprofile (playerid) VALUES (?)'
+        dlog.debug(f"Attempting to insert player id {self.playerid} {sql}")
         timestampnow_iso = datetime.now().isoformat()
         cur = dbcon.cursor()
-        cur.execute('INSERT OR IGNORE INTO playerprofile (playerid) VALUES (?)', (self.playerid, ) )
+        cur.execute(sql, (self.playerid, ) )
         dbcon.commit()
     def getapi_playerprofile(self):
-        print(f"Getting playerprofile from API for {self.playerid}")
+        # https://api.torn.com/v2/user?selections=profile&id=1326025
+        dlog.message(f"Getting playerprofile from API for {self.playerid}")
         self.profilejson = get_api(section='user',selections='profile', id=str(self.playerid))
         self.profilejson = flatten_json(self.profilejson,cleankey=True, delimiter='')
+        self.update_playerprofile()
+    def update_playerprofile(self):
         # this is why ORMs like Alchemy or Django exist
         timestampnow_iso = datetime.now().isoformat()
         sql = "UPDATE playerprofile SET profileupdateon = ? ,"
+        dlog.debug(f"Attempting to update player id {self.playerid} {sql}")
         params = [timestampnow_iso,]
         for key, value in self.profilejson.items():
             if key in self.get_fieldnames():
@@ -535,14 +661,22 @@ class playerprofile:
                     continue
                 sql += f" {key} = ? ,"
                 params.append(value)
+        if self.personalstatsjson:
+            for key, value in self.personalstatsjson.items():
+                if key in self.get_fieldnames():
+                    if key in ('playerid',):
+                        continue
+                    sql += f" {key} = ? ,"
+                    params.append(value)
         sql = sql[:-1]
         params.append(self.playerid)
         sql += " WHERE  playerid = ?"
         cur = dbcon.cursor()
         cur.execute(sql, params )
         dbcon.commit()
-        print(sql)
-        print(params)
+
+    
+    
     def get_fieldnames(self):
         if not self.fieldnames:
             self.fieldnames = get_cur_list(sql="SELECT name FROM PRAGMA_TABLE_INFO('playerprofile')")
@@ -565,8 +699,12 @@ class playerlog():
     def get_playerid(self):
         if self.log_type == 1225: # bazaar buy
             return self.data['seller']
+        elif self.log_type == 8156: # bazaar buy
+            return self.data['attacker']
         else:
             return None
+
+
 
 if __name__ == '__main__':
     main()
