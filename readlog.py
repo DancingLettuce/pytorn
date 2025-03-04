@@ -2,10 +2,11 @@ import argparse
 import sys
 import json
 from pathlib import Path
-import requests
+import requests #sudo apt-get install python3-requests
 from datetime import datetime
 import sqlite3
 
+# 1
 parser = argparse.ArgumentParser()
 parser.add_argument("-api", "--apikey", help="Api key. Stored after first use")
 parser.add_argument("--reloadreference", action="store_true",  help="Reload and rebuild the reference tables Item, Logtype, LogCategory.")
@@ -16,6 +17,7 @@ parser.add_argument("--getmarketprices", action="store_true",  help="Get the pri
 parser.add_argument("--getplayerbyid",  help="Get the details for a specific playerid.  Comma delimit extra text to store in playerprofile.playerlastinteraction")
 parser.add_argument("--debug", action="store_true",  help="Show detailed tracing log")
 parser.add_argument("--debugsql", action="store_true",  help="Show SQLite execution")
+parser.add_argument("--reloadcompany", action="store_true",  help="reload company details")
 
 args = parser.parse_args()
 secrets = {}
@@ -69,6 +71,7 @@ def get_api_v1(section='',selections=''):
         (('&selections=' + selections ) if selections else '') + 
         ('&key=' + secrets['apikey'] )  
         )
+    dlog.debug(f"Calling api_v1 {apiendpoint}")
     response = requests.get(apiendpoint)
     meme = response.json()
     return meme
@@ -189,21 +192,27 @@ def checkinit():
     return True
 
 def init_database():
-    # sqlite viewer online https://inloop.github.io/sqlite-viewer/
+    # sqlite viewer online with export-to-csv https://inloop.github.io/sqlite-viewer/
     # sqlite viewer with refresh https://sqliteviewer.app/#/pytorn.db/table/userlog/
+    # json viewer https://jsonformatter.org/
 
     if args.truncateplayerprofile:
         dbcon.execute("DROP TABLE playerprofile")
     if args.reloadreference:
-        dbcon.execute("DROP TABLE item")
-        dbcon.execute("DROP TABLE logtype")
-        dbcon.execute("DROP TABLE logcategory")
+        dbcon.execute("DROP TABLE IF EXISTS item")
+        dbcon.execute("DROP TABLE IF EXISTS logtype")
+        dbcon.execute("DROP TABLE IF EXISTS logcategory")
+        dbcon.execute("DROP TABLE IF EXISTS company")
+    if args.reloadcompany:
+        dbcon.execute("DROP TABLE IF EXISTS company")
+    
     #dbcon.execute("DROP TABLE userlog")
     dbcon.execute("""CREATE TABLE IF NOT EXISTS userlog (id INTEGER PRIMARY KEY, log_id TEXT UNIQUE, log_type TEXT, title TEXT, 
         timestamp INTEGER, torndatetime TEXT,
         data TEXT, params TEXT )""")
-    dbcon.execute("""CREATE TABLE IF NOT EXISTS logtype (id INTEGER PRIMARY KEY, log_id INTEGER UNIQUE, title TEXT )""")
-    dbcon.execute("""CREATE TABLE IF NOT EXISTS logcategory (id INTEGER PRIMARY KEY, log_id INTEGER UNIQUE, title TEXT )""")
+    dbcon.execute("""CREATE TABLE IF NOT EXISTS logtype (id INTEGER PRIMARY KEY, logtype_id INTEGER UNIQUE, title TEXT )""")
+    dbcon.execute("""CREATE TABLE IF NOT EXISTS logcategory (id INTEGER PRIMARY KEY, logcategory_id INTEGER UNIQUE, title TEXT )""")
+    dbcon.execute("""CREATE TABLE IF NOT EXISTS company (id INTEGER PRIMARY KEY, company_id INTEGER UNIQUE, name TEXT )""")
     dbcon.execute("""CREATE TABLE IF NOT EXISTS item (id INTEGER PRIMARY KEY, updated_on TEXT, 
         item_id INTEGER UNIQUE, name TEXT ,
         description TEXT, effect TEXT, requirement TEXT, type TEXT ,
@@ -211,111 +220,6 @@ def init_database():
         is_found_in_city TEXT, vendor_country TEXT, vendor_name TEXT, 
         buy_price INTEGER, sell_price INTEGER, market_price INTEGER,
         circulation INTEGER, category TEXT, stealth_level INTEGER )""")
-    res = get_cur(sql='SELECT count(*) FROM logtype').fetchone()
-    rowcount = 0
-    if res[0] == 0:
-        print(f"Getting logtype from the Torn API.")
-        res = get_api(section='torn/logtypes')
-        sql = 'INSERT OR IGNORE INTO logtype (log_id, title) values (?,?)'
-        cur = dbcon.cursor()
-        rowcount = 0
-        for value in res['logtypes']:
-            rowcount += 1
-            print_flush(f"{rowcount} {value['title']}")
-            cur.execute(sql, ( 
-            value['id'], value['title']
-            ))
-        print()
-        dbcon.commit()
-    res = get_cur(sql='SELECT count(*) FROM logcategory').fetchone()
-    if res[0] == 0:
-        print(f"Getting logcategories from the Torn API.")
-        res = get_api(section='torn/logcategories')
-        sql = 'INSERT OR IGNORE INTO logcategory (log_id, title) values (?,?)'
-        cur = dbcon.cursor()
-        rowcount = 0
-        for value in res['logcategories']:
-            rowcount += 1
-            print_flush(f"{rowcount} {value['title']}")
-            cur.execute(sql, (
-            value['id'], value['title']
-            ))
-        print()
-        dbcon.commit()
-    res = get_cur(sql='SELECT count(*) FROM item').fetchone()
-    if res[0] == 0:
-        print(f"Getting items from the Torn API.")
-        res = get_api(section='torn/items')
-        sql = """INSERT OR IGNORE INTO item (item_id, updated_on, 
-            name, description, effect, 
-            requirement , type ,
-            sub_type , is_masked, is_tradable , 
-            is_found_in_city , vendor_country , vendor_name , 
-            buy_price , sell_price , market_price ,
-            circulation , category , stealth_level ) 
-            values (?,?,
-                ?,?,?,
-                ?,?,
-                ?,?,?,
-                ?,?,?,
-                ?,?,?,
-                ?,?,?
-                )"""
-        cur = dbcon.cursor()
-        rowcount = 0
-        for value in res['items']:
-            rowcount += 1
-            print_flush(f"{rowcount} {value['name']}")
-            value_param = []
-            value_param.append(value['id'])
-            value_param.append(datetime.now().isoformat())
-            value_param.append(value['name'])
-            value_param.append(value['description'])
-            value_param.append(value['effect'])
-            value_param.append(value['requirement'])
-            value_param.append(value['type'])
-            value_param.append(value['sub_type'])
-            value_param.append(value['is_masked'])
-            value_param.append(value['is_tradable'])
-            value_param.append(value['is_found_in_city'])
-            if value.get('value',None) is not None:
-                if value['value'].get('vendor', None) is not None:
-                    value_param.append(value['value']['vendor'].get('country',''))
-                else:
-                    value_param.append(None)
-            else:
-                value_param.append(None)
-            if value.get('value',None) is not None:
-                if value['value'].get('vendor', None) is not None:
-                    value_param.append(value['value']['vendor'].get('name',''))
-                else:
-                    value_param.append(None)
-            else:
-                value_param.append(None)
-            value_param.append(value.get('value',{}).get('buy_price',None))
-            value_param.append(value.get('value',{}).get('sell_price',None))
-            value_param.append(value.get('value',{}).get('market_price',None))
-            value_param.append(value['circulation'])
-            if value.get('details',None) is not None:
-                value_param.append(value['details'].get('category',''))
-                value_param.append(value['details'].get('stealth_level',''))
-            else:
-                value_param.append(None)
-                value_param.append(None)
-            # 419 = small sc
-            # 1086 = driver l
-            cur.execute(sql, value_param)
-            #value['id'], datetime.now().isoformat(),
-            #value['name'], value['description'], value['effect'],
-            #value['requirement'],value['type'],
-            #value['sub_type'],value['is_masked'],value['is_tradable'],
-            #value['is_found_in_city'],value.get('value',{}).get('vendor',{}).get('country',''), value.get('value',{}).get('vendor',{}).get('name',''),
-            #value.get('value',{}).get('buy_price',None),value.get('value',{}).get('sell_price',None), value.get('value',{}).get('market_price',None),
-            #value['circulation'], value['details']['category'], value['details']['stealth_level']
-            #))
-        print()
-        dbcon.commit()
-
     dbcon.execute("""CREATE TABLE IF NOT EXISTS playerprofile (id INTEGER PRIMARY KEY, 
         attackingattackswon INTEGER,
         attackingattackslost INTEGER,
@@ -437,6 +341,130 @@ def init_database():
         statsupdatedon TEXT,
         playerlastinteraction TEXT
     )""")
+
+    res = get_cur(sql='SELECT count(*) FROM logtype').fetchone()
+    rowcount = 0
+    if res[0] == 0:
+        dlog.message(f"Getting logtype from the Torn API.")
+        res = get_api(section='torn/logtypes')
+        sql = 'INSERT OR IGNORE INTO logtype (logtype_id, title) values (?,?)'
+        cur = dbcon.cursor()
+        rowcount = 0
+        for value in res['logtypes']:
+            rowcount += 1
+            print_flush(f"{rowcount} {value['title']}")
+            cur.execute(sql, ( 
+            value['id'], value['title']
+            ))
+        print()
+        dbcon.commit()
+    res = get_cur(sql='SELECT count(*) FROM logcategory').fetchone()
+    if res[0] == 0:
+        dlog.message(f"Getting logcategories from the Torn API.")
+        res = get_api(section='torn/logcategories')
+        sql = 'INSERT OR IGNORE INTO logcategory (logcategory_id, title) values (?,?)'
+        cur = dbcon.cursor()
+        rowcount = 0
+        for value in res['logcategories']:
+            rowcount += 1
+            print_flush(f"{rowcount} {value['title']}")
+            cur.execute(sql, (
+            value['id'], value['title']
+            ))
+        print()
+        dbcon.commit()
+    res = get_cur(sql='SELECT count(*) FROM item').fetchone()
+    if res[0] == 0:
+        dlog.message(f"Getting items from the Torn API.")
+        res = get_api(section='torn/items')
+        sql = """INSERT OR IGNORE INTO item (item_id, updated_on, 
+            name, description, effect, 
+            requirement , type ,
+            sub_type , is_masked, is_tradable , 
+            is_found_in_city , vendor_country , vendor_name , 
+            buy_price , sell_price , market_price ,
+            circulation , category , stealth_level ) 
+            values (?,?,
+                ?,?,?,
+                ?,?,
+                ?,?,?,
+                ?,?,?,
+                ?,?,?,
+                ?,?,?
+                )"""
+        cur = dbcon.cursor()
+        rowcount = 0
+        for value in res['items']:
+            rowcount += 1
+            print_flush(f"{rowcount} {value['name']}")
+            value_param = []
+            value_param.append(value['id'])
+            value_param.append(datetime.now().isoformat())
+            value_param.append(value['name'])
+            value_param.append(value['description'])
+            value_param.append(value['effect'])
+            value_param.append(value['requirement'])
+            value_param.append(value['type'])
+            value_param.append(value['sub_type'])
+            value_param.append(value['is_masked'])
+            value_param.append(value['is_tradable'])
+            value_param.append(value['is_found_in_city'])
+            if value.get('value',None) is not None:
+                if value['value'].get('vendor', None) is not None:
+                    value_param.append(value['value']['vendor'].get('country',''))
+                else:
+                    value_param.append(None)
+            else:
+                value_param.append(None)
+            if value.get('value',None) is not None:
+                if value['value'].get('vendor', None) is not None:
+                    value_param.append(value['value']['vendor'].get('name',''))
+                else:
+                    value_param.append(None)
+            else:
+                value_param.append(None)
+            value_param.append(value.get('value',{}).get('buy_price',None))
+            value_param.append(value.get('value',{}).get('sell_price',None))
+            value_param.append(value.get('value',{}).get('market_price',None))
+            value_param.append(value['circulation'])
+            if value.get('details',None) is not None:
+                value_param.append(value['details'].get('category',''))
+                value_param.append(value['details'].get('stealth_level',''))
+            else:
+                value_param.append(None)
+                value_param.append(None)
+            # 419 = small sc
+            # 1086 = driver l
+            cur.execute(sql, value_param)
+            #value['id'], datetime.now().isoformat(),
+            #value['name'], value['description'], value['effect'],
+            #value['requirement'],value['type'],
+            #value['sub_type'],value['is_masked'],value['is_tradable'],
+            #value['is_found_in_city'],value.get('value',{}).get('vendor',{}).get('country',''), value.get('value',{}).get('vendor',{}).get('name',''),
+            #value.get('value',{}).get('buy_price',None),value.get('value',{}).get('sell_price',None), value.get('value',{}).get('market_price',None),
+            #value['circulation'], value['details']['category'], value['details']['stealth_level']
+            #))
+        print()
+        dbcon.commit()
+
+    # https://api.torn.com/torn/?selections=companies&key=*
+    res = get_cur(sql='SELECT count(*) FROM company').fetchone()
+    if res[0] == 0:
+        dlog.message(f"Getting companies from the Torn API.")
+        res = get_api_v1(section='torn', selections='companies')
+        sql = 'INSERT OR IGNORE INTO company (company_id, name) values (?,?)'
+        cur = dbcon.cursor()
+        rowcount = 0
+        for key, value in res['companies'].items():
+            rowcount += 1
+            print_flush(f"{rowcount} {value['name']}")
+            cur.execute(sql, (
+            key, value['name']
+            ))
+        print()
+        dbcon.commit()
+  
+
 
 def get_cur(sql, args=None):
     cur = dbcon.cursor()
@@ -682,7 +710,7 @@ class playerprofile:
             self.fieldnames = get_cur_list(sql="SELECT name FROM PRAGMA_TABLE_INFO('playerprofile')")
         return self.fieldnames
 
-class playerlog():
+class playerlog:
     log_type = None
     title = None
     timestamp = None
@@ -704,7 +732,26 @@ class playerlog():
         else:
             return None
 
+class marketplace:
+    def __init__(self,**kwargs):
+    # call the super by using super().__init__(**kwargs)
+        for k,v in kwargs.items():
+            setattr(self,k,v)
+    def getitemlisting(self, itemid):
+        # https://api.torn.com/v2/market/175/itemmarket
+        res = get_api(section='market', slug=itemid,urlbreadcrumb='itemmarket' )
+        print(res)
 
+class item:
+    item_id = None
+    name = None
+    sell_price = None
+    market_price = None
+    profit = None 
+    def __init__(self,**kwargs):
+    # call the super by using super().__init__(**kwargs)
+        for k,v in kwargs.items():
+            setattr(self,k,v)
 
 if __name__ == '__main__':
     main()
