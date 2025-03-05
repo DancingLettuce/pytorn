@@ -6,7 +6,9 @@ import requests #sudo apt-get install python3-requests
 from datetime import datetime
 import sqlite3
  
-# v4
+# v5
+
+
 
 parser = argparse.ArgumentParser()
 parser.add_argument("-api", "--apikey", help="Api key. Stored after first use")
