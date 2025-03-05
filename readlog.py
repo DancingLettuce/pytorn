@@ -6,7 +6,7 @@ import requests #sudo apt-get install python3-requests
 from datetime import datetime
 import sqlite3
  
-# v 6
+# v 7
 
 
 
@@ -21,11 +21,21 @@ parser.add_argument("--getplayerbyid",  help="Get the details for a specific pla
 parser.add_argument("--debug", action="store_true",  help="Show detailed tracing log")
 parser.add_argument("--debugsql", action="store_true",  help="Show SQLite execution")
 parser.add_argument("--reloadcompany", action="store_true",  help="reload company details")
-
 args = parser.parse_args()
 secrets = {}
 apiurl = 'https://api.torn.com/v2/'
 dbcon = sqlite3.connect('pytorn.db')
+
+####################
+## some useful defaults
+default_itemstotrack = None
+default_itemstotrack = """419
+    1350
+ """
+default_itemstotrack = list(map(int, default_itemstotrack.split() ))
+
+## end
+####################
 
 class debuglog():
     debuglog = []
@@ -160,8 +170,10 @@ def checkinit():
             return False
     if args.apikey:
         secrets['apikey'] = args.apikey
+    if default_itemstotrack:
+        secrets['itemstotrack'] = default_itemstotrack
     if args.itemstotrack:
-        secrets['itemstotrack'] = args.itemstotrack
+        secrets['itemstotrack'] = list(map(int, args.itemstotrack.split(',') ))
     if not secrets.get('apikey',None):
         print("ERROR: there is no API key. Initialise with the --apikey argument.")
         return False
@@ -565,21 +577,44 @@ def main():
                     sys.exit()
     
     if args.getmarketprices:
-        #res = get_cur(sql="SELECT item_id, name, sell_price FROM item WHERE item_id in (?)",args= (secrets['itemstotrack'],))
-        res = get_cur(sql="SELECT item_id, name, sell_price FROM item WHERE item_id in (" + secrets['itemstotrack'] +")")
-        ncount = 4
-        for row in res:
-            print(f"{row[0]} {row[1]} {row[2]}")
-            #itm = item(item_id=row[0])
-            mkt = marketplace()
-            mkt.getitemlisting(row[0])
-            n = 0
-            for item in mkt.listing:
-                n += 1
-                if n >= ncount:
-                    break
-                print(f"Price: {item['price']}, Amount: {item['amount']}, ")
-            sys.exit()
+        summary = []
+        for itemtotrack in secrets['itemstotrack']:
+            #res = get_cur(sql="SELECT item_id, name, sell_price FROM item WHERE item_id in (?)",args= (secrets['itemstotrack'],))
+            res = get_cur(sql="SELECT item_id, name, sell_price FROM item WHERE item_id in (" + str(itemtotrack) +")")
+            ncount = 4
+            marketitems = []
+            for row in res:
+                thestockitem = stockitem(item_id=row[0], name=row[1],sell_price=row[2])
+                #itm = item(item_id=row[0])
+                mkt = marketplace()
+                mkt.getitemlisting(row[0])
+                n = 0
+                for item in mkt.listing:
+                    if n >= ncount:
+                        break
+                    
+                    themarketitem = marketitem(stockitem=thestockitem, market_price=item['price'], market_amount=item['amount'])
+                    if themarketitem.is_profit():
+                        if n==0 :
+                            print(f"{thestockitem.name} sell_price={thestockitem.get_sell_price():,}")
+                            summary.append(f"{thestockitem.name}, sell_price={thestockitem.get_sell_price():,} Profit={themarketitem.get_profit():,} market_amount={themarketitem.market_amount:,}")
+                        print(f"\tProfit={themarketitem.get_profit():,} market_amount={themarketitem.market_amount:,}")
+                        n += 1
+                    else:
+                        if n == 0:
+                            print(f"{thestockitem.name} sell_price={thestockitem.get_sell_price():,} market_price={themarketitem.get_market_price():,} No items to buy")
+                        break
+        print("--------------------------------")
+        if summary:
+            for line in summary:
+                print(line)
+        else:
+            print(f"Nothing to buy")
+
+                    #item_id=row[0], name=row[1],sell_price=row[2], market_price=item['price'])
+                    #print(f"Price: {item['price']}, Amount: {item['amount']}, ")
+                    
+
             
 
     if args.getplayerbyid:
@@ -758,18 +793,41 @@ class marketplace:
         # https://api.torn.com/v2/market/175/itemmarket
         res = get_api(section='market', slug=str(itemid),urlbreadcrumb='itemmarket' )
         self.listing = res['itemmarket']['listings']
+        dlog.debug(f"Market listing {self.listing}")
 
-class item:
+class stockitem:
     item_id = None
     name = None
-    sell_price = None
-    market_price = None
-    profit = None 
+    sell_price = 0
+
     def __init__(self,**kwargs):
     # call the super by using super().__init__(**kwargs)
         for k,v in kwargs.items():
             setattr(self,k,v)
-
+    def get_sell_price(self):
+        if self.sell_price is None:
+            return 0
+        else:
+            return self.sell_price
+class marketitem(stockitem):
+    stockitem = None
+    market_price = 0
+    market_amount = None
+    profit = None 
+    def __init__(self,**kwargs):
+        #super().__init__(**kwargs)
+        for k,v in kwargs.items():
+            setattr(self,k,v)
+    def get_profit(self):
+        return self.stockitem.get_sell_price() - self.get_market_price()
+    def is_profit(self):
+        return self.get_profit() >= 0
+    def get_market_price(self):
+        if self.market_price is None:
+            return 0
+        else:
+            return self.market_price
+    
 if __name__ == '__main__':
     main()
 
