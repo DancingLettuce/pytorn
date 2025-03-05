@@ -5,8 +5,9 @@ from pathlib import Path
 import requests #sudo apt-get install python3-requests
 from datetime import datetime
 import sqlite3
+ 
+# v3
 
-# 1
 parser = argparse.ArgumentParser()
 parser.add_argument("-api", "--apikey", help="Api key. Stored after first use")
 parser.add_argument("--reloadreference", action="store_true",  help="Reload and rebuild the reference tables Item, Logtype, LogCategory.")
@@ -564,8 +565,20 @@ def main():
     if args.getmarketprices:
         #res = get_cur(sql="SELECT item_id, name, sell_price FROM item WHERE item_id in (?)",args= (secrets['itemstotrack'],))
         res = get_cur(sql="SELECT item_id, name, sell_price FROM item WHERE item_id in (" + secrets['itemstotrack'] +")")
+        ncount = 4
         for row in res:
             print(f"{row[0]} {row[1]} {row[2]}")
+            #itm = item(item_id=row[0])
+            mkt = marketplace()
+            mkt.getitemlisting(row[0])
+            n = 0
+            for item in mkt.listing:
+                n += 1
+                if n >= ncount:
+                    break
+                print(f"Price: {item['price']}, Amount: {item['amount']}, ")
+            sys.exit()
+            
 
     if args.getplayerbyid:
         if args.getplayerbyid == 'me':
@@ -578,6 +591,7 @@ def main():
             pp = playerprofile(playerselection[0],forceapi=True)
             print(f"""Player {pp.getattrib('name')}, level {pp.getattrib('level')}, age {pp.getattrib('age')} {pp.getattrib('statusdescription')} 
             Attacks {pp.getattrib('attackingattackswon')}, Drugs {pp.getattrib('drugstotal')}, Xan {pp.getattrib('drugsxanax')}""")
+
 
     print("Complete.")
 
@@ -733,14 +747,15 @@ class playerlog:
             return None
 
 class marketplace:
+    listing = []
     def __init__(self,**kwargs):
     # call the super by using super().__init__(**kwargs)
         for k,v in kwargs.items():
             setattr(self,k,v)
     def getitemlisting(self, itemid):
         # https://api.torn.com/v2/market/175/itemmarket
-        res = get_api(section='market', slug=itemid,urlbreadcrumb='itemmarket' )
-        print(res)
+        res = get_api(section='market', slug=str(itemid),urlbreadcrumb='itemmarket' )
+        self.listing = res['itemmarket']['listings']
 
 class item:
     item_id = None
