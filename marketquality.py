@@ -35,7 +35,7 @@ def getitemlisting(itemid):
 
 for item in itemids:
     res = getitemlisting(str(item))
-    print(f"Name: {res['item']['name']}, Type: {res['item']['type']}")
+    print(f"{item} Name: {res['item']['name']}, Type: {res['item']['type']}")
     n = 0
     for listing in res['listings']:
         n += 1
