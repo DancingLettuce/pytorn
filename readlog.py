@@ -6,7 +6,7 @@ import requests #sudo apt-get install python3-requests
 from datetime import datetime
 import sqlite3
  
-# v5
+# v 6
 
 
 
