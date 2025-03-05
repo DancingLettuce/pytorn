@@ -1,4 +1,4 @@
-# v2
+# v3
 # sort UI by quality
 # https://www.torn.com/page.php?sid=ItemMarket#/market/view=search&itemID=790&itemName=Plastic%20Sword&itemType=Melee&sortField=quality&sortOrder=DESC
 
@@ -10,7 +10,7 @@ import sys
 parser = argparse.ArgumentParser()
 parser.add_argument("-api", "--apikey", help="Api key")
 parser.add_argument("--itemids", help="Comma delimited list of item IDs")
-parser.add_argument("--maxitems", help="Max number of martet items to show")
+parser.add_argument("--maxitems", help="Max number of market items to show")
 args = parser.parse_args()
 
 itemids = [790,223,419,621]
