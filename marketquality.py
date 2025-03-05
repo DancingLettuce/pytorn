@@ -27,7 +27,6 @@ if args.maxitems:
 def getitemlisting(itemid):
     # https://api.torn.com/v2/market/175/itemmarket
     apiendpoint = f'https://api.torn.com/v2/market/{itemid}/itemmarket'
-    print(apiendpoint)
     headers = {'Authorization':'ApiKey '+ apikey}
     response = requests.get(apiendpoint, headers = headers)
     res = response.json()['itemmarket']
