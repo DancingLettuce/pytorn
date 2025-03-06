@@ -902,7 +902,7 @@ class bazaar:
             self.items_list.append(bi)
     def print_bazaar_items(self):
         for i in self.bazaar_items:
-            print(f"{i.name} {i.price}" )
+            print(f"{i.name} {i.price} profit={i.get_profit()}" )
 
 class bazaaritem:
     item_id = None
@@ -923,8 +923,16 @@ class bazaaritem:
         self.quantity = ajson.get('quantity','')
         self.price = ajson.get('price','')
         self.market_price = ajson.get('market_price','')
-    def set_sell_price(self):
-        res = get_cur(sql='SELECT MAX(timestamp) as max_timestamp, MIN(timestamp) as min_timestamp, count(*) FROM sell_price').fetchone()
+    def get_sell_price(self):
+        if self.sell_price is None:
+            res = get_cur(sql='SELECT sell_price FROM item WHERE item_id = ?', args=(self.item_id,)).fetchone()
+            self.sell_price = res[0]
+        return self.sell_price
+    def get_profit(self):
+        if self.price is not None and self.sell_price is not None:
+            return self.sell_price - self.price
+        else:
+            return None
 
 if __name__ == '__main__':
     main()
