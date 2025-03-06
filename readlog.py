@@ -6,7 +6,8 @@ import requests #sudo apt-get install python3-requests
 from datetime import datetime
 import sqlite3
  
-# v 09a
+# v 10
+
 
 
 
@@ -24,6 +25,7 @@ parser.add_argument("--debug", action="store_true",  help="Show detailed tracing
 parser.add_argument("--debugsql", action="store_true",  help="Show SQLite execution")
 parser.add_argument("--reloadcompany", action="store_true",  help="reload company details")
 parser.add_argument("--getfaction",   help="Get faction members")
+parser.add_argument("--getbazaar",   help="Get bazaar for a given user")
 
 args = parser.parse_args()
 secrets = {}
@@ -630,7 +632,11 @@ def main():
         f = faction(faction_id=args.getfaction)
         f.get_faction_members()
         f.print_faction_members()
-        pass
+
+    if args.getbazaar:
+        f = bazaar(bazaar_id=args.getbazaar)
+        f.get_bazaar_items()
+        f.print_bazaar_items()
 
 
     print("Complete.")
@@ -850,6 +856,7 @@ class faction:
     def print_faction_members(self):
         for member in self.members_list:
             print(f"{member.name}:{member.level} Life={member.life_current}/{member.life_maximum}" )
+
 class factionmember:
     member_id = None
     name = None
@@ -876,6 +883,48 @@ class factionmember:
         self.life_current = ajson['life']['current']
         self.life_maximum = ajson['life']['maximum']
 
+class bazaar:
+    # https://api.torn.com/v2/user?selections=bazaar&id=1526458
+    bazaar_id = None
+    player_id = None
+    items_json = None
+    item_list = []
+    def __init__(self,**kwargs):
+        #super().__init__(**kwargs)
+        for k,v in kwargs.items():
+            setattr(self,k,v)
+    def get_bazaaritems(self):
+        section, selections='', cat='', ts_to='', ts_from='', id='', slug='', urlbreadcrumb=''
+        self.items_json = get_api(section='user', selections='bazaar', id=str(self.bazaar_id))['bazaar']
+        for bitem in self.items_json:
+            bi = bazaaritem()
+            bi.attribfromjson(bitem)
+            self.items_list.append(bi)
+    def print_bazaar_items(self):
+        for i in self.bazaar_items:
+            print(f"{i.name} {i.price}" )
+
+class bazaaritem:
+    item_id = None
+    name = None
+    type= None
+    quantity = None
+    price = None
+    market_price = None
+    sell_price = None
+    def __init__(self,**kwargs):
+        #super().__init__(**kwargs)
+        for k,v in kwargs.items():
+            setattr(self,k,v)
+    def attribfromjson(self,ajson):
+        self.item_id = ajson.get('id','')
+        self.name = ajson.get('name','')
+        self.type = ajson.get('type','')
+        self.quantity = ajson.get('quantity','')
+        self.price = ajson.get('price','')
+        self.market_price = ajson.get('market_price','')
+    def set_sell_price(self):
+        res = get_cur(sql='SELECT MAX(timestamp) as max_timestamp, MIN(timestamp) as min_timestamp, count(*) FROM sell_price').fetchone()
 
 if __name__ == '__main__':
     main()
