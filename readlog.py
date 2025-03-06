@@ -6,7 +6,8 @@ import requests #sudo apt-get install python3-requests
 from datetime import datetime
 import sqlite3
  
-# v 7
+# v 09
+
 
 
 
@@ -21,6 +22,8 @@ parser.add_argument("--getplayerbyid",  help="Get the details for a specific pla
 parser.add_argument("--debug", action="store_true",  help="Show detailed tracing log")
 parser.add_argument("--debugsql", action="store_true",  help="Show SQLite execution")
 parser.add_argument("--reloadcompany", action="store_true",  help="reload company details")
+parser.add_argument("--getfaction",   help="Get faction members")
+
 args = parser.parse_args()
 secrets = {}
 apiurl = 'https://api.torn.com/v2/'
@@ -33,7 +36,6 @@ default_itemstotrack = """419
     1350
  """
 default_itemstotrack = list(map(int, default_itemstotrack.split() ))
-
 ## end
 ####################
 
@@ -106,7 +108,6 @@ def flatten_json(y,cleankey=False, delimiter = '.'):
                 out[name[:-len(delimiter)]] = x
             else:
                 out[name] = x
-
     flatten(y)
     return out
 
@@ -479,8 +480,6 @@ def init_database():
         print()
         dbcon.commit()
   
-
-
 def get_cur(sql, args=None):
     cur = dbcon.cursor()
     if args:
@@ -614,9 +613,6 @@ def main():
                     #item_id=row[0], name=row[1],sell_price=row[2], market_price=item['price'])
                     #print(f"Price: {item['price']}, Amount: {item['amount']}, ")
                     
-
-            
-
     if args.getplayerbyid:
         if args.getplayerbyid == 'me':
             pp = playerprofile('me',forceapi=True)
@@ -628,6 +624,12 @@ def main():
             pp = playerprofile(playerselection[0],forceapi=True)
             print(f"""Player {pp.getattrib('name')}, level {pp.getattrib('level')}, age {pp.getattrib('age')} {pp.getattrib('statusdescription')} 
             Attacks {pp.getattrib('attackingattackswon')}, Drugs {pp.getattrib('drugstotal')}, Xan {pp.getattrib('drugsxanax')}""")
+
+    if args.getfaction:
+        f = faction(faction_id=args.getfaction)
+        f.get_faction_members()
+        f.print_faction_members()
+        pass
 
 
     print("Complete.")
@@ -827,7 +829,53 @@ class marketitem(stockitem):
             return 0
         else:
             return self.market_price
-    
+
+class faction:
+    faction_id = None
+    faction_name = None
+    members_json = None
+    members_list = []
+    def __init__(self,**kwargs):
+        #super().__init__(**kwargs)
+        for k,v in kwargs.items():
+            setattr(self,k,v)
+    def get_faction_members(self):
+        # https://api.torn.com/v2/faction/25335/members
+        self.members_json = get_api(section='faction', slug=str(self.faction_id), urlbreadcrumb='members')['members']
+        for member in self.members_json:
+            fm = factionmember()
+            fm.attribfromjson(member)
+            self.members_list.append(fm)
+    def print_faction_members(self):
+        for member in self.members_list:
+            print(f"{member.name}:{member.level} Life={member.life_current}/{member.life_maximum}" )
+class factionmember:
+    member_id = None
+    name = None
+    level = None
+    action = None
+    action_timestamp = None
+    action_relative = None
+    status_state = None
+    life_current = None
+    life_maximum = None
+    revive_setting = None
+    def __init__(self,**kwargs):
+        #super().__init__(**kwargs)
+        for k,v in kwargs.items():
+            setattr(self,k,v)
+    def attribfromjson(self,ajson):
+        self.member_id = ajson.get('id','')
+        self.name = ajson.get('name','')
+        self.level = ajson.get('level','')
+        self.action = ajson['last_action']['status']
+        self.action_timestamp = ajson['last_action']['timestamp']
+        self.action_relative = ajson['last_action']['relative']
+        self.status_state = ajson['status']['state']
+        self.life_current = ajson['life']['current']
+        self.life_maximum = ajson['life']['maximum']
+
+
 if __name__ == '__main__':
     main()
 
