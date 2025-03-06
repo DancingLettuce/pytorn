@@ -6,8 +6,8 @@ import requests #sudo apt-get install python3-requests
 from datetime import datetime
 import sqlite3
  
-# v 10
-
+# v 10a
+#2 
 
 
 
@@ -485,9 +485,9 @@ def init_database():
   
 def get_cur(sql, args=None):
     cur = dbcon.cursor()
+    dlog.debug(f"get_cur {sql} {args}")
     if args:
         return(cur.execute(sql, args))
-
     else:    
         return(cur.execute(sql))
 
@@ -594,7 +594,6 @@ def main():
                 for item in mkt.listing:
                     if n >= ncount:
                         break
-                    
                     themarketitem = marketitem(stockitem=thestockitem, market_price=item['price'], market_amount=item['amount'])
                     if themarketitem.is_profit():
                         if n==0 :
@@ -636,9 +635,16 @@ def main():
     if args.getbazaar:
         f = bazaar(bazaar_id=args.getbazaar)
         f.get_bazaar_items()
-        f.print_bazaar_items()
-
-
+        bitems = {}
+        print(f"Total bazaar items = {len(f.items_list)}")
+        for i in f.items_list:
+            print(f"{i.name} Price={i.price} Sell={i.sell_price} profit={i.get_profit()}" )
+            if i.get_profit() is not None and i.get_profit()>=0 and i.price >1:
+                print(f"{i.name} ispr") 
+                bitems[i.name] = f"Price={i.price} Sell={i.sell_price} profit={i.get_profit()}" 
+        print("---------------")
+        for key,value in bitems.items():
+            print(f"{key} {value}" )
     print("Complete.")
 
 def flattenjson():
@@ -888,21 +894,18 @@ class bazaar:
     bazaar_id = None
     player_id = None
     items_json = None
-    item_list = []
+    items_list = []
     def __init__(self,**kwargs):
         #super().__init__(**kwargs)
         for k,v in kwargs.items():
             setattr(self,k,v)
-    def get_bazaaritems(self):
-        section, selections='', cat='', ts_to='', ts_from='', id='', slug='', urlbreadcrumb=''
+    def get_bazaar_items(self):
         self.items_json = get_api(section='user', selections='bazaar', id=str(self.bazaar_id))['bazaar']
         for bitem in self.items_json:
             bi = bazaaritem()
             bi.attribfromjson(bitem)
             self.items_list.append(bi)
-    def print_bazaar_items(self):
-        for i in self.bazaar_items:
-            print(f"{i.name} {i.price} profit={i.get_profit()}" )
+
 
 class bazaaritem:
     item_id = None
@@ -917,12 +920,13 @@ class bazaaritem:
         for k,v in kwargs.items():
             setattr(self,k,v)
     def attribfromjson(self,ajson):
-        self.item_id = ajson.get('id','')
+        self.item_id = ajson.get('ID','')
         self.name = ajson.get('name','')
         self.type = ajson.get('type','')
         self.quantity = ajson.get('quantity','')
         self.price = ajson.get('price','')
         self.market_price = ajson.get('market_price','')
+        self.get_sell_price()
     def get_sell_price(self):
         if self.sell_price is None:
             res = get_cur(sql='SELECT sell_price FROM item WHERE item_id = ?', args=(self.item_id,)).fetchone()
