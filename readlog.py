@@ -6,8 +6,8 @@ import requests #sudo apt-get install python3-requests
 from datetime import datetime
 import sqlite3
  
-# v 13
-#1
+# v14
+#2 
 
 
 
@@ -28,6 +28,8 @@ parser.add_argument("--truncatecompany", action="store_true",  help="reload comp
 parser.add_argument("--getfaction",   help="Get faction members")
 parser.add_argument("--getbazaar",   help="Get bazaar for a given user")
 parser.add_argument("--truncatebazaar", action="store_true",  help="reload bazaar details")
+parser.add_argument("--truncatebazaar", action="store_true",  help="reload bazaar details")
+parser.add_argument("--readtextfiles", action="store_true",  help="reload bazaar details")
 
 args = parser.parse_args()
 secrets = {}
@@ -218,32 +220,32 @@ def init_database():
     # json viewer https://jsonformatter.org/
 
     if args.truncateplayerprofile:
-        dbcon.execute("DROP TABLE playerprofile")
+        execute_sql("DROP TABLE playerprofile")
     if args.truncatereference:
-        dbcon.execute("DROP TABLE IF EXISTS item")
-        dbcon.execute("DROP TABLE IF EXISTS logtype")
-        dbcon.execute("DROP TABLE IF EXISTS logcategory")
-        dbcon.execute("DROP TABLE IF EXISTS company")
+        execute_sql("DROP TABLE IF EXISTS item")
+        dexecute_sql("DROP TABLE IF EXISTS logtype")
+        execute_sql("DROP TABLE IF EXISTS logcategory")
+        execute_sql("DROP TABLE IF EXISTS company")
     if args.truncatecompany:
-        dbcon.execute("DROP TABLE IF EXISTS company")
+        execute_sql("DROP TABLE IF EXISTS company")
     if args.truncatebazaar:
-        dbcon.execute("DROP TABLE IF EXISTS bazaar")
+        execute_sql("DROP TABLE IF EXISTS bazaar")
     
     #dbcon.execute("DROP TABLE userlog")
-    dbcon.execute("""CREATE TABLE IF NOT EXISTS userlog (id INTEGER PRIMARY KEY, log_id TEXT UNIQUE, log_type TEXT, title TEXT, 
+    execute_sql("""CREATE TABLE IF NOT EXISTS userlog (id INTEGER PRIMARY KEY, log_id TEXT UNIQUE, log_type TEXT, title TEXT, 
         timestamp INTEGER, torndatetime TEXT,
         data TEXT, params TEXT )""")
-    dbcon.execute("""CREATE TABLE IF NOT EXISTS logtype (id INTEGER PRIMARY KEY, logtype_id INTEGER UNIQUE, title TEXT )""")
-    dbcon.execute("""CREATE TABLE IF NOT EXISTS logcategory (id INTEGER PRIMARY KEY, logcategory_id INTEGER UNIQUE, title TEXT )""")
-    dbcon.execute("""CREATE TABLE IF NOT EXISTS company (id INTEGER PRIMARY KEY, company_id INTEGER UNIQUE, name TEXT )""")
-    dbcon.execute("""CREATE TABLE IF NOT EXISTS item (id INTEGER PRIMARY KEY, updated_on TEXT, 
+    execute_sql("""CREATE TABLE IF NOT EXISTS logtype (id INTEGER PRIMARY KEY, logtype_id INTEGER UNIQUE, title TEXT )""")
+    execute_sql("""CREATE TABLE IF NOT EXISTS logcategory (id INTEGER PRIMARY KEY, logcategory_id INTEGER UNIQUE, title TEXT )""")
+    execute_sql("""CREATE TABLE IF NOT EXISTS company (id INTEGER PRIMARY KEY, company_id INTEGER UNIQUE, name TEXT )""")
+    execute_sql("""CREATE TABLE IF NOT EXISTS item (id INTEGER PRIMARY KEY, updated_on TEXT, 
         item_id INTEGER UNIQUE, name TEXT ,
         description TEXT, effect TEXT, requirement TEXT, type TEXT ,
         sub_type TEXT, is_masked TEXT, is_tradable TEXT, 
         is_found_in_city TEXT, vendor_country TEXT, vendor_name TEXT, 
         buy_price INTEGER, sell_price INTEGER, market_price INTEGER,
         circulation INTEGER, category TEXT, stealth_level INTEGER )""")
-    dbcon.execute("""CREATE TABLE IF NOT EXISTS playerprofile (id INTEGER PRIMARY KEY, 
+    execute_sql("""CREATE TABLE IF NOT EXISTS playerprofile (id INTEGER PRIMARY KEY, 
         attackingattackswon INTEGER,
         attackingattackslost INTEGER,
         attackingdefendswon INTEGER,
@@ -364,7 +366,7 @@ def init_database():
         statsupdatedon TEXT,
         playerlastinteraction TEXT
     )""")
-    dbcon.execute("""CREATE TABLE IF NOT EXISTS bazaar (id INTEGER PRIMARY KEY, player_id INTEGER UNIQUE, 
+    execute_sql("""CREATE TABLE IF NOT EXISTS bazaar (id INTEGER PRIMARY KEY, player_id INTEGER , 
         updateon TEXT, item_id INTEGER, name TEXT, type TEXT, quantity INTEGER, price INTEGER, market_price INTEGER, sell_price INTEGER)""")
     res = get_cur(sql='SELECT count(*) FROM logtype').fetchone()
     rowcount = 0
@@ -503,6 +505,14 @@ def get_cur_list(sql):
     cur.row_factory = lambda cursor, row: row[0]
     return(cur.execute(sql).fetchall())
 
+def execute_sql(sql, args=None):
+    dlog.debug(f"Executing {sql} {args}")
+    if args is None:
+        dbcon.execute(sql)
+    else:
+        dbcon.execute(sql, args)
+    dbcon.commit()
+
 def writelogtodb(thelog):
         fieldnames = get_cur_list(sql="SELECT name FROM PRAGMA_TABLE_INFO('userlog')")
         sql1 = 'INSERT OR IGNORE INTO userlog (log_id, log_type, title, timestamp, torndatetime, data, params'
@@ -639,9 +649,9 @@ def main():
 
     if args.getbazaar:
         f = bazaar(player_id=args.getbazaar)
+        f.delete_bazaar_items()
         f.get_bazaar_items()
-        f.insertplayerid()
-        f.update_db
+        f.update_db()
         bitems = {}
         print(f"Total bazaar items = {len(f.items_list)}")
         for i in f.items_list:
@@ -912,29 +922,27 @@ class bazaar:
             bi = bazaaritem()
             bi.attribfromjson(bitem)
             self.items_list.append(bi)
-    def insertplayerid(self):
-        sql='INSERT OR IGNORE INTO bazaar (player_id) VALUES (?)'
-        dlog.debug(f"Attempting to insert player id {self.player_id} {sql}")
-        timestampnow_iso = datetime.now().isoformat()
-        cur = dbcon.cursor()
-        cur.execute(sql, (self.player_id, ) )
-        dbcon.commit()
-    def update_db(self, bazaaritem):
+    def delete_bazaar_items(self):
+        execute_sql("DELETE FROM bazaar WHERE player_id = ?", (self.player_id, ))
+        
+    def update_db(self):
         # this is why ORMs like Alchemy or Django exist
         timestampnow_iso = datetime.now().isoformat()
-        sql = "UPDATE bazaar SET updateon = ? ,"
-        dlog.debug(f"Attempting to update bazaar for player id {self.player_id} {sql}")
-        params = [timestampnow_iso,]
+
         for bi in self.items_list:
+            sql = "INSERT INTO bazaar (player_id, updateon,"
+            sql_p = '?,?,'
+            params = [self.player_id, timestampnow_iso,]
             for fi in ('item_id', 'name', 'type', 'quantity', 'price', 'market_price', 'sell_price'):
                 sql += f"{fi},"
+                sql_p += '?,'
                 params.append(getattr(bi,fi, None))
-        sql = sql[:-1]
-        params.append(self.player_id)
-        sql += " WHERE  playerid = ?"
-        cur = dbcon.cursor()
-        cur.execute(sql, params )
-        dbcon.commit()
+            sql = sql[:-1]
+            sql_p = sql_p[:-1]
+            sql += ") VALUES (" + sql_p + ")"
+            dlog.debug(f"Attempting to update bazaar for player id {self.player_id} {sql} {params}")
+            execute_sql(sql, params )
+    
 
 class bazaaritem:
     item_id = None
