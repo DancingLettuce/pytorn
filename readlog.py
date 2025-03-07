@@ -6,8 +6,8 @@ import requests #sudo apt-get install python3-requests
 from datetime import datetime
 import sqlite3
  
-# v 11
-#5b
+# v 13
+#1
 
 
 
@@ -16,7 +16,7 @@ import sqlite3
 
 parser = argparse.ArgumentParser()
 parser.add_argument("-api", "--apikey", help="Api key. Stored after first use")
-parser.add_argument("--reloadreference", action="store_true",  help="Reload and rebuild the reference tables Item, Logtype, LogCategory.")
+parser.add_argument("--truncatereference", action="store_true",  help="Reload and rebuild the reference tables Item, Logtype, LogCategory.")
 parser.add_argument("--truncateplayerprofile", action="store_true",  help="Delete and re-create the playerprofile table.")
 parser.add_argument("--itemstotrack", help="Comma separated item IDs to track. Stored after first use.")
 parser.add_argument("--nolog", action="store_true",  help="Skip checking the log and downloading")
@@ -24,9 +24,10 @@ parser.add_argument("--getmarketprices", action="store_true",  help="Get the pri
 parser.add_argument("--getplayerbyid",  help="Get the details for a specific playerid.  Comma delimit extra text to store in playerprofile.playerlastinteraction")
 parser.add_argument("--debug", action="store_true",  help="Show detailed tracing log")
 parser.add_argument("--debugsql", action="store_true",  help="Show SQLite execution")
-parser.add_argument("--reloadcompany", action="store_true",  help="reload company details")
+parser.add_argument("--truncatecompany", action="store_true",  help="reload company details")
 parser.add_argument("--getfaction",   help="Get faction members")
 parser.add_argument("--getbazaar",   help="Get bazaar for a given user")
+parser.add_argument("--truncatebazaar", action="store_true",  help="reload bazaar details")
 
 args = parser.parse_args()
 secrets = {}
@@ -218,13 +219,15 @@ def init_database():
 
     if args.truncateplayerprofile:
         dbcon.execute("DROP TABLE playerprofile")
-    if args.reloadreference:
+    if args.truncatereference:
         dbcon.execute("DROP TABLE IF EXISTS item")
         dbcon.execute("DROP TABLE IF EXISTS logtype")
         dbcon.execute("DROP TABLE IF EXISTS logcategory")
         dbcon.execute("DROP TABLE IF EXISTS company")
-    if args.reloadcompany:
+    if args.truncatecompany:
         dbcon.execute("DROP TABLE IF EXISTS company")
+    if args.truncatebazaar:
+        dbcon.execute("DROP TABLE IF EXISTS bazaar")
     
     #dbcon.execute("DROP TABLE userlog")
     dbcon.execute("""CREATE TABLE IF NOT EXISTS userlog (id INTEGER PRIMARY KEY, log_id TEXT UNIQUE, log_type TEXT, title TEXT, 
@@ -361,7 +364,8 @@ def init_database():
         statsupdatedon TEXT,
         playerlastinteraction TEXT
     )""")
-
+    dbcon.execute("""CREATE TABLE IF NOT EXISTS bazaar (id INTEGER PRIMARY KEY, player_id INTEGER UNIQUE, 
+        updateon TEXT, item_id INTEGER, name TEXT, type TEXT, quantity INTEGER, price INTEGER, market_price INTEGER, sell_price INTEGER)""")
     res = get_cur(sql='SELECT count(*) FROM logtype').fetchone()
     rowcount = 0
     if res[0] == 0:
@@ -634,8 +638,10 @@ def main():
         f.print_faction_members()
 
     if args.getbazaar:
-        f = bazaar(bazaar_id=args.getbazaar)
+        f = bazaar(player_id=args.getbazaar)
         f.get_bazaar_items()
+        f.insertplayerid()
+        f.update_db
         bitems = {}
         print(f"Total bazaar items = {len(f.items_list)}")
         for i in f.items_list:
@@ -646,6 +652,7 @@ def main():
         print("---------------")
         for key,value in bitems.items():
             print(f"{key} {value}" )
+    
     print("Complete.")
 
 def flattenjson():
@@ -708,7 +715,7 @@ class playerprofile:
         self.personalstatsjson = get_api(section='user',urlbreadcrumb='personalstats', slug=str(self.playerid), cat='popular')['personalstats']
         self.personalstatsjson = flatten_json(self.personalstatsjson,cleankey=True, delimiter='')
         dlog.debug(f'Player personalstats json {self.personalstatsjson}')
-        self.update_playerprofile()
+        self.update_db()
     def get_profile_me(self):
         # 'https://api.torn.com/v2/user?selections=profile' -- my profile
         dlog.message('Getting my profile from API')
@@ -719,7 +726,7 @@ class playerprofile:
         self.playerid = self.getattrib('playerid')
         dlog.debug(f"My playerid = {self.playerid}")
         self.insertplayerid()
-        self.update_playerprofile()
+        self.update_db()
     def get_profile_age(self):
         self.exists_db()
         return self.profile_age
@@ -743,8 +750,8 @@ class playerprofile:
         dlog.message(f"Getting playerprofile from API for {self.playerid}")
         self.profilejson = get_api(section='user',selections='profile', id=str(self.playerid))
         self.profilejson = flatten_json(self.profilejson,cleankey=True, delimiter='')
-        self.update_playerprofile()
-    def update_playerprofile(self):
+        self.update_db()
+    def update_db(self):
         # this is why ORMs like Alchemy or Django exist
         timestampnow_iso = datetime.now().isoformat()
         sql = "UPDATE playerprofile SET profileupdateon = ? ,"
@@ -892,7 +899,6 @@ class factionmember:
 
 class bazaar:
     # https://api.torn.com/v2/user?selections=bazaar&id=1526458
-    bazaar_id = None
     player_id = None
     items_json = None
     items_list = []
@@ -901,12 +907,34 @@ class bazaar:
         for k,v in kwargs.items():
             setattr(self,k,v)
     def get_bazaar_items(self):
-        self.items_json = get_api(section='user', selections='bazaar', id=str(self.bazaar_id))['bazaar']
+        self.items_json = get_api(section='user', selections='bazaar', id=str(self.player_id))['bazaar']
         for bitem in self.items_json:
             bi = bazaaritem()
             bi.attribfromjson(bitem)
             self.items_list.append(bi)
-
+    def insertplayerid(self):
+        sql='INSERT OR IGNORE INTO bazaar (player_id) VALUES (?)'
+        dlog.debug(f"Attempting to insert player id {self.player_id} {sql}")
+        timestampnow_iso = datetime.now().isoformat()
+        cur = dbcon.cursor()
+        cur.execute(sql, (self.player_id, ) )
+        dbcon.commit()
+    def update_db(self, bazaaritem):
+        # this is why ORMs like Alchemy or Django exist
+        timestampnow_iso = datetime.now().isoformat()
+        sql = "UPDATE bazaar SET updateon = ? ,"
+        dlog.debug(f"Attempting to update bazaar for player id {self.player_id} {sql}")
+        params = [timestampnow_iso,]
+        for bi in self.items_list:
+            for fi in ('item_id', 'name', 'type', 'quantity', 'price', 'market_price', 'sell_price'):
+                sql += f"{fi},"
+                params.append(getattr(bi,fi, None))
+        sql = sql[:-1]
+        params.append(self.player_id)
+        sql += " WHERE  playerid = ?"
+        cur = dbcon.cursor()
+        cur.execute(sql, params )
+        dbcon.commit()
 
 class bazaaritem:
     item_id = None
