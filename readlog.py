@@ -5,6 +5,8 @@ from pathlib import Path
 import requests #sudo apt-get install python3-requests
 from datetime import datetime
 import sqlite3
+import os
+import re
  
 # v14
 #2 
@@ -28,8 +30,7 @@ parser.add_argument("--truncatecompany", action="store_true",  help="reload comp
 parser.add_argument("--getfaction",   help="Get faction members")
 parser.add_argument("--getbazaar",   help="Get bazaar for a given user")
 parser.add_argument("--truncatebazaar", action="store_true",  help="reload bazaar details")
-parser.add_argument("--truncatebazaar", action="store_true",  help="reload bazaar details")
-parser.add_argument("--readtextfiles", action="store_true",  help="reload bazaar details")
+parser.add_argument("--readtextfiles", action="store_true",  help="Get Player ID etc from text files")
 
 args = parser.parse_args()
 secrets = {}
@@ -68,7 +69,38 @@ dlog = debuglog()
 if args.debugsql:
     # trace calls
     dbcon.set_trace_callback(print)
+############
 
+
+
+def readtextfile():
+    filepaths = ('textfiles',)
+
+
+    for filepath in filepaths:
+        for f in os.listdir(filepath):
+            f = f.lower() 
+            if f.startswith('#'):
+                continue
+            if f.startswith('@'):
+                continue
+            if f.endswith('.zip'):
+                continue
+            file_stats = os.stat(filepath + '/' +  f) 
+            if file_stats.st_size < 1:
+                continue 
+            with open(f) as fin:
+                for line in fin:
+                    print(line)
+                    pid = re.findall(r'https://www.torn.com/bazaar.php?user=Id=3D\.(.*?)#/"', line)
+                    print(pid)
+
+        #with open( filepath,'r', encoding='utf-8') as f:
+    
+
+
+
+###################
 def get_api(section, selections='', cat='', ts_to='', ts_from='', id='', slug='', urlbreadcrumb=''):
     # ts_to = timestamp to, ts_from = timestamp from
     apiendpoint = (apiurl + section + 
@@ -663,6 +695,9 @@ def main():
         for key,value in bitems.items():
             print(f"{key} {value}" )
     
+    if args.readtextfiles:
+        readtextfile()
+
     print("Complete.")
 
 def flattenjson():
