@@ -23,4 +23,9 @@ When the script writes the log, it reads the log and creates a playerprofile ent
 Item
 The item table contains all the items.  It is the foreign key to userlog and features such as Market and Bazaar.
 
+ReadTextFile
+Save web pages in the textfile directory and the script will parse the files for player ID numbers and will write the player ID numbers to a file
+
+Bazaar
+Read a specific player's bazaar or all the players in the newline-delimited player ID file.  Write to database.
 
