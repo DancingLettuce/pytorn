@@ -2,18 +2,16 @@ import argparse
 import sys
 import json
 from pathlib import Path
+import pathlib
 import requests #sudo apt-get install python3-requests
 from datetime import datetime
 import sqlite3
 import os
 import re
- 
-# v14
-#2 
-
-
-
-
+import time
+import csv
+# v17
+#
 
 
 parser = argparse.ArgumentParser()
@@ -29,13 +27,19 @@ parser.add_argument("--debugsql", action="store_true",  help="Show SQLite execut
 parser.add_argument("--truncatecompany", action="store_true",  help="reload company details")
 parser.add_argument("--getfaction",   help="Get faction members")
 parser.add_argument("--getbazaar",   help="Get bazaar for a given user")
+parser.add_argument("--getbazaarfile",   help="Get bazaars for all users in INFILE")
 parser.add_argument("--truncatebazaar", action="store_true",  help="reload bazaar details")
 parser.add_argument("--readtextfiles", action="store_true",  help="Get Player ID etc from text files")
+parser.add_argument("--outfile",   help="Export output to file")
+parser.add_argument("--dbtocsv",   help="Output DB table to csv, set --outfile if needed")
+
 
 args = parser.parse_args()
 secrets = {}
 apiurl = 'https://api.torn.com/v2/'
 dbcon = sqlite3.connect('pytorn.db')
+apicount = 0
+timestart = datetime.now()
 
 ####################
 ## some useful defaults
@@ -69,66 +73,74 @@ dlog = debuglog()
 if args.debugsql:
     # trace calls
     dbcon.set_trace_callback(print)
-############
-
-
 
 def readtextfile():
     filepaths = ('textfiles',)
 
-
+    playerids = []
     for filepath in filepaths:
-        for f in os.listdir(filepath):
-            f = f.lower() 
-            if f.startswith('#'):
+        for p in Path(filepath).iterdir():
+            #if p.stem != 't':
+            #    continue
+            print(f"Reading {p.stem} {p.suffix}")
+            if p.name.startswith('#'):
                 continue
-            if f.startswith('@'):
+            if p.name.startswith('@'):
                 continue
-            if f.endswith('.zip'):
+            if p.suffix == '.zip':
                 continue
-            file_stats = os.stat(filepath + '/' +  f) 
-            if file_stats.st_size < 1:
+            if p.stat().st_size < 1:
                 continue 
-            with open(f) as fin:
+            with open(p) as fin:
                 for line in fin:
-                    print(line)
-                    pid = re.findall(r'https://www.torn.com/bazaar.php?user=Id=3D\.(.*?)#/"', line)
-                    print(pid)
+                    # regex for mhtml files with newlines
+                    #re.findall(r'https:\/\/www\.torn\.com\/bazaar\.php\?user=\WId=3D(.*)#\/', line)
+                    # example for html single page <a href="https://www.torn.com/profiles.php?XID=2593057" target="_blank">
+                    pid = re.findall(r'https:\/\/www\.torn\.com\/profiles\.php\?XID=(.*)" ', line)
+                    if pid:
+                        for id in pid:
+                            if id not in playerids:
+                                playerids.append(id)
+                print(f"Found {len(playerids)} unique player IDs so far")
+    print(playerids)
+    if args.outfile:
+        with open(args.outfile, "w") as fout:
+            for id in playerids:
+                fout.write(id + '\n')
+        print(f"Written Player IDs to {args.outfile}")
 
-        #with open( filepath,'r', encoding='utf-8') as f:
-    
-
-
-
-###################
-def get_api(section, selections='', cat='', ts_to='', ts_from='', id='', slug='', urlbreadcrumb=''):
-    # ts_to = timestamp to, ts_from = timestamp from
-    apiendpoint = (apiurl + section + 
-        (('/' + slug  ) if slug else '') + 
-        (('/' + urlbreadcrumb  ) if urlbreadcrumb else '') + 
-        '?' + 
-        ((('&selections=' + selections ) if selections else '') + 
-        (('&cat=' + cat ) if cat else '') + 
-        (('&to=' + ts_to ) if ts_to else '')  + 
-        (('&from=' + ts_from ) if ts_from else '') ) +
-        (('&id=' + id ) if id else '') 
-        )
-    dlog.debug(f"Calling api {apiendpoint}")
-    headers = {'Authorization':'ApiKey '+ secrets['apikey']}
+def get_api(section, selections='', cat='', ts_to='', ts_from='', id='', slug='', urlbreadcrumb='', version=2):
+    global apicount
+    if apicount >= 97:
+        print(f"Pausing for 0.6 seconds")
+        time.sleep(0.6)
+    headers = None
+    if version == 1:
+        apiurl_v1 = 'https://api.torn.com/'
+        apiendpoint = (apiurl_v1 + section + '/?' + 
+            (('&selections=' + selections ) if selections else '') + 
+            ('&key=' + secrets['apikey'] )  
+            )
+        headers = None
+    else:
+        # ts_to = timestamp to, ts_from = timestamp from
+        apiendpoint = (apiurl + section + 
+            (('/' + slug  ) if slug else '') + 
+            (('/' + urlbreadcrumb  ) if urlbreadcrumb else '') + 
+            '?' + 
+            ((('&selections=' + selections ) if selections else '') + 
+            (('&cat=' + cat ) if cat else '') + 
+            (('&to=' + ts_to ) if ts_to else '')  + 
+            (('&from=' + ts_from ) if ts_from else '') ) +
+            (('&id=' + id ) if id else '') 
+            )
+        headers = {'Authorization':'ApiKey '+ secrets['apikey']}    
+    dlog.debug(f"Calling api v{version} {apiendpoint}")
     response = requests.get(apiendpoint, headers = headers)
+    apicount += 1
     meme = response.json()
     return meme
     
-def get_api_v1(section='',selections=''):
-    apiurl_v1 = 'https://api.torn.com/'
-    apiendpoint = (apiurl_v1 + section + '/?' + 
-        (('&selections=' + selections ) if selections else '') + 
-        ('&key=' + secrets['apikey'] )  
-        )
-    dlog.debug(f"Calling api_v1 {apiendpoint}")
-    response = requests.get(apiendpoint)
-    meme = response.json()
-    return meme
 def flatten_json(y,cleankey=False, delimiter = '.'):
     out = {}
     def flatten(x, name=''):
@@ -251,6 +263,7 @@ def init_database():
     # sqlite viewer with refresh https://sqliteviewer.app/#/pytorn.db/table/userlog/
     # json viewer https://jsonformatter.org/
 
+    Path('textfiles').mkdir(parents=False, exist_ok=True)
     if args.truncateplayerprofile:
         execute_sql("DROP TABLE playerprofile")
     if args.truncatereference:
@@ -269,7 +282,9 @@ def init_database():
         data TEXT, params TEXT )""")
     execute_sql("""CREATE TABLE IF NOT EXISTS logtype (id INTEGER PRIMARY KEY, logtype_id INTEGER UNIQUE, title TEXT )""")
     execute_sql("""CREATE TABLE IF NOT EXISTS logcategory (id INTEGER PRIMARY KEY, logcategory_id INTEGER UNIQUE, title TEXT )""")
+    execute_sql("CREATE INDEX IF NOT EXISTS idxlc_logcategory_id ON logcategory (logcategory_id)")
     execute_sql("""CREATE TABLE IF NOT EXISTS company (id INTEGER PRIMARY KEY, company_id INTEGER UNIQUE, name TEXT )""")
+    execute_sql("CREATE INDEX IF NOT EXISTS idxco_company_id ON company (company_id)")
     execute_sql("""CREATE TABLE IF NOT EXISTS item (id INTEGER PRIMARY KEY, updated_on TEXT, 
         item_id INTEGER UNIQUE, name TEXT ,
         description TEXT, effect TEXT, requirement TEXT, type TEXT ,
@@ -277,6 +292,7 @@ def init_database():
         is_found_in_city TEXT, vendor_country TEXT, vendor_name TEXT, 
         buy_price INTEGER, sell_price INTEGER, market_price INTEGER,
         circulation INTEGER, category TEXT, stealth_level INTEGER )""")
+    execute_sql("CREATE INDEX IF NOT EXISTS idxitm_item_id ON item (item_id)")
     execute_sql("""CREATE TABLE IF NOT EXISTS playerprofile (id INTEGER PRIMARY KEY, 
         attackingattackswon INTEGER,
         attackingattackslost INTEGER,
@@ -398,8 +414,12 @@ def init_database():
         statsupdatedon TEXT,
         playerlastinteraction TEXT
     )""")
+    execute_sql("CREATE INDEX IF NOT EXISTS idxpl_player_id ON playerprofile (playerid)")
     execute_sql("""CREATE TABLE IF NOT EXISTS bazaar (id INTEGER PRIMARY KEY, player_id INTEGER , 
         updateon TEXT, item_id INTEGER, name TEXT, type TEXT, quantity INTEGER, price INTEGER, market_price INTEGER, sell_price INTEGER)""")
+    execute_sql("CREATE INDEX IF NOT EXISTS idxbz_item_id ON bazaar (item_id)")
+    execute_sql("CREATE INDEX IF NOT EXISTS idxbz_player_id ON bazaar (player_id)")
+    
     res = get_cur(sql='SELECT count(*) FROM logtype').fetchone()
     rowcount = 0
     if res[0] == 0:
@@ -509,7 +529,7 @@ def init_database():
     res = get_cur(sql='SELECT count(*) FROM company').fetchone()
     if res[0] == 0:
         dlog.message(f"Getting companies from the Torn API.")
-        res = get_api_v1(section='torn', selections='companies')
+        res = get_api(section='torn', selections='companies',version=1)
         sql = 'INSERT OR IGNORE INTO company (company_id, name) values (?,?)'
         cur = dbcon.cursor()
         rowcount = 0
@@ -537,10 +557,13 @@ def get_cur_list(sql):
     cur.row_factory = lambda cursor, row: row[0]
     return(cur.execute(sql).fetchall())
 
-def execute_sql(sql, args=None):
-    dlog.debug(f"Executing {sql} {args}")
+def execute_sql(sql, args=None, many=False):
+    #dlog.debug(f"Executing {sql} {args} {many}")
+    dlog.debug(f"Executing {sql} argcount={len(args) if args is not None else None} {many}")
     if args is None:
         dbcon.execute(sql)
+    elif many:
+        dbcon.executemany(sql, args)
     else:
         dbcon.execute(sql, args)
     dbcon.commit()
@@ -578,6 +601,7 @@ def writelogtodb(thelog):
         dbcon.commit()
 
 def main():
+    global timestart
     if not checkinit():
         print("Error. Stopped")
         sys.exit()
@@ -679,26 +703,60 @@ def main():
         f.get_faction_members()
         f.print_faction_members()
 
-    if args.getbazaar:
-        f = bazaar(player_id=args.getbazaar)
-        f.delete_bazaar_items()
-        f.get_bazaar_items()
-        f.update_db()
-        bitems = {}
-        print(f"Total bazaar items = {len(f.items_list)}")
-        for i in f.items_list:
-            print(f"{i.name} Price={i.price} Sell={i.sell_price} profit={i.get_profit()}" )
-            if i.get_profit() is not None and i.get_profit()>=0 and i.price >1:
-                print(f"{i.name} ispr") 
-                bitems[i.name] = f"Price={i.price} Sell={i.sell_price} profit={i.get_profit()}" 
-        print("---------------")
-        for key,value in bitems.items():
-            print(f"{key} {value}" )
-    
+    if args.getbazaar or args.getbazaarfile:
+        playerids = []
+        if args.getbazaarfile:
+            with open(args.getbazaarfile) as fin:
+                playerids = fin.read().splitlines()
+        else:
+            playerids = (args.getbazaar,)
+        for pid in playerids:
+            timediff = (datetime.now() - timestart).total_seconds() / 60
+            print(f"Api called {apicount} times. Started {timestart} duration {timediff} minutes. Approximately {apicount / timediff} API per minute.")
+            print(f"Processing player {pid}")
+            f = bazaar(player_id=pid) 
+            if f.get_bazaar_age() is not None and f.bazaar_age < 30:
+                print(f"Skipping player {pid} because the bazaar is < 30 mins old it is {f.get_bazaar_age() }")
+                continue
+            f.delete_bazaar_items()
+            f.get_bazaar_items()
+            f.update_db()
+            bitems = {}
+            print(f"Total bazaar items = {len(f.items_list)}")
+            #for i in f.items_list:
+            #    print(f"{i.name} Price={i.price} Sell={i.sell_price} profit={i.get_profit()}" )
+            #    if i.get_profit() is not None and i.get_profit()>=0 and i.price >1:
+            #        print(f"{i.name} ispr") 
+            #        bitems[i.name] = f"Price={i.price} Sell={i.sell_price} profit={i.get_profit()}" 
+            print("---------------")
+            for key,value in bitems.items():
+                print(f"{key} {value}" )
+        sql = "UPDATE bazaar SET sell_price = i.sell_price FROM (select item_id, sell_price FROM item) as i where i.item_id = bazaar.item_id"
+        execute_sql(sql)
+
     if args.readtextfiles:
         readtextfile()
 
-    print("Complete.")
+    if args.dbtocsv:
+        if args.dbtocsv == 'bazaar':
+            print("bazaar")
+            sql = "SELECT player_id, updateon, item_id, name, type, quantity, price, market_price, sell_price FROM bazaar ORDER BY player_id, item_id"
+            sql = "select player_id, item_id, name, sell_price, price, sell_price - price as profit FROM bazaar WHERE price > 1 AND (sell_price - price) > 10 order by sell_price - price;"
+            res = get_cur (sql)
+            fields = [col[0] for col in res.description]
+        else:
+            print("nothing to do")
+               
+        if res:
+            if args.outfile:
+                with open(args.outfile, 'w', newline='') as cf:
+                    writer = csv.writer(cf)
+                    writer.writerow(fields)
+                    for row in res:
+                        writer.writerow(row)
+
+    timediff = (datetime.now() - timestart).total_seconds() / 60
+    print(f"Complete. Api called {apicount} times. Started {timestart} duration {timediff} minutes. Approximately {apicount / timediff} API per minute.")
 
 def flattenjson():
     jsonfields = []
@@ -947,6 +1005,7 @@ class bazaar:
     player_id = None
     items_json = None
     items_list = []
+    bazaar_age = None
     def __init__(self,**kwargs):
         #super().__init__(**kwargs)
         for k,v in kwargs.items():
@@ -956,27 +1015,40 @@ class bazaar:
         for bitem in self.items_json:
             bi = bazaaritem()
             bi.attribfromjson(bitem)
+            # remove for perf
+            #self.get_sell_price()
             self.items_list.append(bi)
     def delete_bazaar_items(self):
         execute_sql("DELETE FROM bazaar WHERE player_id = ?", (self.player_id, ))
-        
+    def get_bazaar_age(self):
+        if self.bazaar_age is None:
+            debuglog(f"Getting age of bazaar for {self.player_id}")
+            res = get_cur(sql='SELECT (julianday(current_timestamp) - min(julianday(updateon))) * 24 * 60  FROM bazaar WHERE player_id=?',
+                args=(self.player_id ,)).fetchone()
+            if res is not None: 
+                self.bazaar_age = res[0]
+        return self.bazaar_age
     def update_db(self):
         # this is why ORMs like Alchemy or Django exist
         timestampnow_iso = datetime.now().isoformat()
+        sql = "INSERT INTO bazaar (player_id, updateon,"
+        sql_p = '?,?,'
+        params = [self.player_id, timestampnow_iso,]
+        for fi in ('item_id', 'name', 'type', 'quantity', 'price', 'market_price', 'sell_price'):
+            sql += f"{fi},"
+            sql_p += '?,'
+        sql = sql[:-1]
+        sql_p = sql_p[:-1]
+        sql += ") VALUES (" + sql_p + ")"
 
+        paramslist = []
         for bi in self.items_list:
-            sql = "INSERT INTO bazaar (player_id, updateon,"
-            sql_p = '?,?,'
             params = [self.player_id, timestampnow_iso,]
             for fi in ('item_id', 'name', 'type', 'quantity', 'price', 'market_price', 'sell_price'):
-                sql += f"{fi},"
-                sql_p += '?,'
                 params.append(getattr(bi,fi, None))
-            sql = sql[:-1]
-            sql_p = sql_p[:-1]
-            sql += ") VALUES (" + sql_p + ")"
-            dlog.debug(f"Attempting to update bazaar for player id {self.player_id} {sql} {params}")
-            execute_sql(sql, params )
+            paramslist.append(params)
+        dlog.debug(f"Attempting to update bazaar for player id {self.player_id} {sql} ")
+        execute_sql(sql, args=paramslist,many=True )
     
 
 class bazaaritem:
@@ -998,7 +1070,7 @@ class bazaaritem:
         self.quantity = ajson.get('quantity','')
         self.price = ajson.get('price','')
         self.market_price = ajson.get('market_price','')
-        self.get_sell_price()
+        
     def get_sell_price(self):
         if self.sell_price is None:
             res = get_cur(sql='SELECT sell_price FROM item WHERE item_id = ?', args=(self.item_id,)).fetchone()
