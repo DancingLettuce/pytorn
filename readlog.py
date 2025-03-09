@@ -28,10 +28,15 @@ parser.add_argument("--truncatecompany", action="store_true",  help="reload comp
 parser.add_argument("--getfaction",   help="Get faction members")
 parser.add_argument("--getbazaar",   help="Get bazaar for a given user")
 parser.add_argument("--getbazaarfile",   help="Get bazaars for all users in INFILE")
+parser.add_argument("--getmarketfile",   help="Get market for all items in INFILE")
 parser.add_argument("--truncatebazaar", action="store_true",  help="reload bazaar details")
 parser.add_argument("--readtextfiles", action="store_true",  help="Get Player ID etc from text files")
 parser.add_argument("--outfile",   help="Export output to file")
 parser.add_argument("--dbtocsv",   help="Output DB table to csv, set --outfile if needed")
+parser.add_argument("--noplayerstats", action="store_true",  help="Don't refresh player stats")
+parser.add_argument("--sleep",   help="How long in seconds to sleep to throttle the API. Default=0.6s")
+parser.add_argument("--dbage",   help="API refreshed if age > dbage. Default = 30mins")
+
 
 
 args = parser.parse_args()
@@ -112,8 +117,9 @@ def readtextfile():
 def get_api(section, selections='', cat='', ts_to='', ts_from='', id='', slug='', urlbreadcrumb='', version=2):
     global apicount
     if apicount >= 97:
-        print(f"Pausing for 0.6 seconds")
-        time.sleep(0.6)
+        if args.sleep:
+            print(f"Pausing for {'0.6' if args.sleep is None else args.sleep} seconds")
+            time.sleep(0.6 if args.sleep is None else float(args.sleep))
     headers = None
     if version == 1:
         apiurl_v1 = 'https://api.torn.com/'
@@ -139,6 +145,7 @@ def get_api(section, selections='', cat='', ts_to='', ts_from='', id='', slug=''
     response = requests.get(apiendpoint, headers = headers)
     apicount += 1
     meme = response.json()
+    dlog.debug(f"Got api response {meme}")
     return meme
     
 def flatten_json(y,cleankey=False, delimiter = '.'):
@@ -559,6 +566,7 @@ def get_cur_list(sql):
 
 def execute_sql(sql, args=None, many=False):
     #dlog.debug(f"Executing {sql} {args} {many}")
+    #print(args)
     dlog.debug(f"Executing {sql} argcount={len(args) if args is not None else None} {many}")
     if args is None:
         dbcon.execute(sql)
@@ -649,9 +657,16 @@ def main():
                     print('Halting...')
                     sys.exit()
     
-    if args.getmarketprices:
+    if args.getmarketprices or args.getmarketfile:
         summary = []
-        for itemtotrack in secrets['itemstotrack']:
+        #for itemtotrack in secrets['itemstotrack']:
+        items = []
+        if args.getmarketfile:
+            with open(args.getmarketfile) as fin:
+                items = fin.read().splitlines()
+        else:
+            items = secrets['itemstotrack']
+        for itemtotrack in items:
             #res = get_cur(sql="SELECT item_id, name, sell_price FROM item WHERE item_id in (?)",args= (secrets['itemstotrack'],))
             res = get_cur(sql="SELECT item_id, name, sell_price FROM item WHERE item_id in (" + str(itemtotrack) +")")
             ncount = 4
@@ -715,9 +730,12 @@ def main():
             print(f"Api called {apicount} times. Started {timestart} duration {timediff} minutes. Approximately {apicount / timediff} API per minute.")
             print(f"Processing player {pid}")
             f = bazaar(player_id=pid) 
-            if f.get_bazaar_age() is not None and f.bazaar_age < 30:
-                print(f"Skipping player {pid} because the bazaar is < 30 mins old it is {f.get_bazaar_age() }")
+            if f.get_bazaar_age() is not None and f.get_bazaar_age() <( 30 if args.dbage is None else float( args.dbage)):
+                print(f"Skipping player {pid} because the bazaar is <{'30' if args.dbage is None else args.dbage} mins old it is {f.get_bazaar_age() }")
                 continue
+            if not args.noplayerstats:
+                dlog.debug(f"Getting player profile for {pid}")
+                f.get_player_profile()
             f.delete_bazaar_items()
             f.get_bazaar_items()
             f.update_db()
@@ -733,6 +751,16 @@ def main():
                 print(f"{key} {value}" )
         sql = "UPDATE bazaar SET sell_price = i.sell_price FROM (select item_id, sell_price FROM item) as i where i.item_id = bazaar.item_id"
         execute_sql(sql)
+
+        sql = """SELECT i.player_id , p.name as player_name, i.name as item_name ,i. price,( i.sell_price - i.price) as profit 
+        FROM bazaar i INNER JOIN playerprofile p on i.player_id = p.playerid
+        WHERE (i.sell_price - i.price) > 1000 and i.price > 1
+        """
+        res = get_cur(sql)
+        print(f"Bazaar items that can be sold at a profit")
+        for row in res:
+            print (f"{row[0]}/{row[1]} {row[2]} {row[4]}")
+
 
     if args.readtextfiles:
         readtextfile()
@@ -798,7 +826,7 @@ class playerprofile:
         return ''
     def exists_db(self):
         if self.existsdb is None:
-            debuglog(self.playerid)
+            debuglog(f"playerprofile getting profile age {self.playerid}")
             res = get_cur(sql='SELECT (julianday(current_timestamp) -julianday(profileupdateon)) * 24 * 60  FROM playerprofile WHERE playerid=?',args=(self.playerid ,)).fetchone()
             if res is not None:
                 self.existsdb = True
@@ -904,8 +932,10 @@ class playerlog:
     def get_playerid(self):
         if self.log_type == 1225: # bazaar buy
             return self.data['seller']
-        elif self.log_type == 8156: # bazaar buy
+        elif self.log_type == 8156: # attack mug receive
             return self.data['attacker']
+        elif self.log_type == 5361: # bust receive success
+            return self.data['buster']
         else:
             return None
 
@@ -1006,10 +1036,17 @@ class bazaar:
     items_json = None
     items_list = []
     bazaar_age = None
+    player_profile = None
     def __init__(self,**kwargs):
         #super().__init__(**kwargs)
+        self.items_list = []
         for k,v in kwargs.items():
             setattr(self,k,v)
+    def get_player_profile(self):
+        if not self.player_profile:
+            self.player_profile = playerprofile(playerid=self.player_id)
+        return self.player_profile
+        
     def get_bazaar_items(self):
         self.items_json = get_api(section='user', selections='bazaar', id=str(self.player_id))['bazaar']
         for bitem in self.items_json:
