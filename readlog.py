@@ -11,21 +11,23 @@ import re
 import time
 import csv
 # v18
-
 #
-
+    # sqlite viewer online with export-to-csv https://inloop.github.io/sqlite-viewer/
+    # sqlite viewer with refresh https://sqliteviewer.app/#/pytorn.db/table/userlog/
+    # json viewer https://jsonformatter.org/
 
 parser = argparse.ArgumentParser()
 parser.add_argument("-api", "--apikey", help="Api key. Stored after first use")
 parser.add_argument("--truncatereference", action="store_true",  help="Reload and rebuild the reference tables Item, Logtype, LogCategory.")
 parser.add_argument("--truncateplayerprofile", action="store_true",  help="Delete and re-create the playerprofile table.")
+parser.add_argument("--truncatecompany", action="store_true",  help="reload company details")
+parser.add_argument("--truncateitem", action="store_true",  help="reload item details")
 parser.add_argument("--itemstotrack", help="Comma separated item IDs to track. Stored after first use.")
 parser.add_argument("--nolog", action="store_true",  help="Skip checking the log and downloading")
 parser.add_argument("--getmarketprices", action="store_true",  help="Get the prices for the itemstotrack")
 parser.add_argument("--getplayerbyid",  help="Get the details for a specific playerid.  Comma delimit extra text to store in playerprofile.playerlastinteraction")
 parser.add_argument("--debug", action="store_true",  help="Show detailed tracing log")
 parser.add_argument("--debugsql", action="store_true",  help="Show SQLite execution")
-parser.add_argument("--truncatecompany", action="store_true",  help="reload company details")
 parser.add_argument("--getfaction",   help="Get faction members")
 parser.add_argument("--getbazaar",   help="Get bazaar for a given user")
 parser.add_argument("--getbazaarfile",   help="Get bazaars for all users in INFILE")
@@ -33,10 +35,13 @@ parser.add_argument("--getmarketfile",   help="Get market for all items in INFIL
 parser.add_argument("--truncatebazaar", action="store_true",  help="reload bazaar details")
 parser.add_argument("--readtextfiles", action="store_true",  help="Get Player ID etc from text files")
 parser.add_argument("--outfile",   help="Export output to file")
+parser.add_argument("--outfilehtml",   help="Export output to file but with HTML links ")
 parser.add_argument("--dbtocsv",   help="Output DB table to csv, set --outfile if needed")
 parser.add_argument("--noplayerstats", action="store_true",  help="Don't refresh player stats")
 parser.add_argument("--sleep",   help="How long in seconds to sleep to throttle the API. Default=0.6s")
 parser.add_argument("--dbage",   help="API refreshed if age > dbage. Default = 30mins")
+parser.add_argument("--showsecrets", action="store_true",  help="List the prepared statement names")
+
 
 
 
@@ -49,11 +54,12 @@ timestart = datetime.now()
 
 ####################
 ## some useful defaults
-default_itemstotrack = None
+
 default_itemstotrack = """419
     1350
  """
 default_itemstotrack = list(map(int, default_itemstotrack.split() ))
+default_itemstotrack = None
 ## end
 ####################
 
@@ -81,46 +87,75 @@ if args.debugsql:
     dbcon.set_trace_callback(print)
 
 def readtextfile():
+    #python3 readlog.py --readtextfiles --outfile ecstacyprofiles.txt --nolog
     filepaths = ('textfiles',)
-
     playerids = []
-    for filepath in filepaths:
-        for p in Path(filepath).iterdir():
-            #if p.stem != 't':
-            #    continue
-            print(f"Reading {p.stem} {p.suffix}")
-            if p.name.startswith('#'):
-                continue
-            if p.name.startswith('@'):
-                continue
-            if p.suffix == '.zip':
-                continue
-            if p.stat().st_size < 1:
-                continue 
-            with open(p) as fin:
-                for line in fin:
-                    # regex for mhtml files with newlines
-                    #re.findall(r'https:\/\/www\.torn\.com\/bazaar\.php\?user=\WId=3D(.*)#\/', line)
-                    # example for html single page <a href="https://www.torn.com/profiles.php?XID=2593057" target="_blank">
-                    pid = re.findall(r'https:\/\/www\.torn\.com\/profiles\.php\?XID=(.*)" ', line)
-                    if pid:
-                        for id in pid:
-                            if id not in playerids:
-                                playerids.append(id)
-                print(f"Found {len(playerids)} unique player IDs so far")
+
+    if True:
+        for filepath in filepaths:
+            for p in Path(filepath).iterdir():
+                #if p.stem != 't':
+                #    continue
+                print(f"Reading {p.stem} {p.suffix}")
+                if p.name.startswith('#'):
+                    continue
+                if p.name.startswith('@'):
+                    continue
+                if p.suffix == '.zip':
+                    continue
+                if p.stat().st_size < 1:
+                    continue 
+                with open(p) as fin:
+                    for line in fin:
+                        # regex for mhtml files with newlines
+                        #re.findall(r'https:\/\/www\.torn\.com\/bazaar\.php\?user=\WId=3D(.*)#\/', line)
+                        # example for html single page <a href="https://www.torn.com/profiles.php?XID=2593057" target="_blank">
+                        pid = re.findall(r'https:\/\/www\.torn\.com\/profiles\.php\?XID=(.*)" ', line)
+                        if pid:
+                            for id in pid:
+                                if id not in playerids:
+                                    playerids.append(id)
+                    print(f"Found {len(playerids)} unique player IDs so far")
+    #playerids = [2593057,2654680]
     print(playerids)
+    
+    playerprofiles = {}
+    n = 0
+    for id in playerids:
+        n+=1
+        pp = playerprofile(playerid=id)
+
+        if not pp.exists_db():    
+            print(f"Getting profile for {id}")
+            pp.getapi_playerprofile()
+        
+        playerprofiles[id] = pp.name
+        print(f"{n}/{len(playerids)} {id} {pp.name}")
+    print("wrting")
     if args.outfile:
         with open(args.outfile, "w") as fout:
             for id in playerids:
-                fout.write(id + '\n')
+                fout.write(str(id) + '\n')
         print(f"Written Player IDs to {args.outfile}")
+
+    if args.outfilehtml:
+        with open(args.outfilehtml, "w") as fout:
+            fout.write("<HTML>\n")
+            fout.write("<OL>\n")
+            for key, value in playerprofiles.items():
+                fout.write("<LI>")
+                fout.write(f"""<a href='https://www.torn.com/profiles.php?XID={key}' target='_blank'>{value}</a> """ )
+                fout.write("</LI>\n")
+            fout.write("</OL>\n")
+            fout.write("</HTML>\n")
+        print(f"Written Player IDs to {args.outfilehtml}")
 
 def get_api(section, selections='', cat='', ts_to='', ts_from='', id='', slug='', urlbreadcrumb='', version=2):
     global apicount
-    if apicount >= 97:
-        if args.sleep:
-            print(f"Pausing for {'0.6' if args.sleep is None else args.sleep} seconds")
-            time.sleep(0.6 if args.sleep is None else float(args.sleep))
+    timediff = (datetime.now() - timestart).total_seconds() / 60
+    if apicount / timediff >= 97:
+        print(f"Pausing for {'0.6' if args.sleep is None else args.sleep} seconds")
+        time.sleep(0.6 if args.sleep is None else float(args.sleep))
     headers = None
     if version == 1:
         apiurl_v1 = 'https://api.torn.com/'
@@ -142,11 +177,21 @@ def get_api(section, selections='', cat='', ts_to='', ts_from='', id='', slug=''
             (('&id=' + id ) if id else '') 
             )
         headers = {'Authorization':'ApiKey '+ secrets['apikey']}    
-    dlog.debug(f"Calling api v{version} {apiendpoint}")
+    dlog.debug(f">{apicount} Calling api v{version} {apiendpoint}")
+    # print(f"{apicount} Calling api v{version} {apiendpoint}")
     response = requests.get(apiendpoint, headers = headers)
     apicount += 1
-    meme = response.json()
-    dlog.debug(f"Got api response {meme}")
+    timediff = (datetime.now() - timestart).total_seconds() / 60
+    dlog.debug(f"Api called {apicount} times. Started {timestart} duration {timediff} minutes. Approximately {apicount / timediff} API per minute.")
+    #print("got response")
+    dlog.debug(f"Response code is {response}")
+    meme = None
+    try:
+        meme = response.json()
+    except Exception as e:
+        print(f"Error {response} calling api {apiendpoint} {e}")
+        return None
+    dlog.debug(f">Got api response {meme}")
     return meme
     
 def flatten_json(y,cleankey=False, delimiter = '.'):
@@ -267,10 +312,6 @@ def checkinit():
     return True
 
 def init_database():
-    # sqlite viewer online with export-to-csv https://inloop.github.io/sqlite-viewer/
-    # sqlite viewer with refresh https://sqliteviewer.app/#/pytorn.db/table/userlog/
-    # json viewer https://jsonformatter.org/
-
     Path('textfiles').mkdir(parents=False, exist_ok=True)
     if args.truncateplayerprofile:
         execute_sql("DROP TABLE playerprofile")
@@ -283,7 +324,8 @@ def init_database():
         execute_sql("DROP TABLE IF EXISTS company")
     if args.truncatebazaar:
         execute_sql("DROP TABLE IF EXISTS bazaar")
-    
+    if args.truncateitem:
+        execute_sql("DROP TABLE IF EXISTS item")
     #dbcon.execute("DROP TABLE userlog")
     execute_sql("""CREATE TABLE IF NOT EXISTS userlog (id INTEGER PRIMARY KEY, log_id TEXT UNIQUE, log_type TEXT, title TEXT, 
         timestamp INTEGER, torndatetime TEXT,
@@ -299,7 +341,9 @@ def init_database():
         sub_type TEXT, is_masked TEXT, is_tradable TEXT, 
         is_found_in_city TEXT, vendor_country TEXT, vendor_name TEXT, 
         buy_price INTEGER, sell_price INTEGER, market_price INTEGER,
-        circulation INTEGER, category TEXT, stealth_level INTEGER )""")
+        circulation INTEGER, category TEXT, stealth_level INTEGER,
+        label TEXT DEFAULT '',
+        monitorprice INTEGER  )""")
     execute_sql("CREATE INDEX IF NOT EXISTS idxitm_item_id ON item (item_id)")
     execute_sql("""CREATE TABLE IF NOT EXISTS playerprofile (id INTEGER PRIMARY KEY, 
         attackingattackswon INTEGER,
@@ -599,6 +643,8 @@ def writelogtodb(thelog):
                 datakey += '_'
                 if type(datavalue) is list:
                     datavalue =  str(datavalue)
+                elif type(datavalue) is dict:
+                    datavalue =  str(datavalue)
                 sql3 += ',' + datakey
                 sql4 += ',?'
                 theparams.append(datavalue)
@@ -606,6 +652,7 @@ def writelogtodb(thelog):
                     dbcon.execute('ALTER TABLE userlog ADD ' + datakey + ' TEXT')
                     fieldnames.append(datakey)
             sql3 += ') ' + sql4 + ')'
+            dlog.debug(f"writing to db {sql3} {theparams}")
             cur.execute(sql3, theparams)
         dbcon.commit()
 
@@ -658,7 +705,12 @@ def main():
                     print('Halting...')
                     sys.exit()
     
+    if args.showsecrets:
+        #python3 readlog.py --showsecrets
+        print(f"Secrets: {secrets}")
+
     if args.getmarketprices or args.getmarketfile:
+        #python3 readlog.py --getmarketprices
         summary = []
         #for itemtotrack in secrets['itemstotrack']:
         items = []
@@ -667,50 +719,83 @@ def main():
                 items = fin.read().splitlines()
         else:
             items = secrets['itemstotrack']
+        print(f"Getting prices for market and bazaar for {items}")
+        
+        top3items = []
         for itemtotrack in items:
             #res = get_cur(sql="SELECT item_id, name, sell_price FROM item WHERE item_id in (?)",args= (secrets['itemstotrack'],))
-            res = get_cur(sql="SELECT item_id, name, sell_price FROM item WHERE item_id in (" + str(itemtotrack) +")")
+#            res = get_cur(sql="SELECT item_id, name, sell_price FROM item WHERE item_id in (" + str(itemtotrack) +")")
             ncount = 4
             marketitems = []
-            for row in res:
-                thestockitem = stockitem(item_id=row[0], name=row[1],sell_price=row[2])
-                #itm = item(item_id=row[0])
-                mkt = marketplace()
-                mkt.getitemlisting(row[0])
-                n = 0
-                for item in mkt.listing:
-                    if n >= ncount:
-                        break
-                    themarketitem = marketitem(stockitem=thestockitem, market_price=item['price'], market_amount=item['amount'])
-                    if themarketitem.is_profit():
-                        if n==0 :
-                            print(f"{thestockitem.name} sell_price={thestockitem.get_sell_price():,}")
-                            summary.append(f"{thestockitem.name}, sell_price={thestockitem.get_sell_price():,} Profit={themarketitem.get_profit():,} market_amount={themarketitem.market_amount:,}")
-                        print(f"\tProfit={themarketitem.get_profit():,} market_amount={themarketitem.market_amount:,}")
-                        n += 1
-                    else:
-                        if n == 0:
-                            print(f"{thestockitem.name} sell_price={thestockitem.get_sell_price():,} market_price={themarketitem.get_market_price():,} No items to buy")
-                        break
+            #thestockitem = stockitem(item_id=row[0], name=row[1],sell_price=row[2])
+            thestockitem = stockitem(item_id = itemtotrack)
+            thestockitem.get_attrib_fromdb()
+            print(f"Getting details for {thestockitem.name} {thestockitem.item_id}")
+            #itm = item(item_id=row[0])
+            mkt = marketplace()
+            mkt.getitemlisting(itemtotrack)
+            n = 0
+            for item in mkt.listing:
+                if n >= ncount:
+                    break
+                themarketitem = marketitem(stockitem=thestockitem, market_price=item['price'], market_amount=item['amount'])
+                top3items.append(f"{thestockitem.name} sell_price={thestockitem.get_sell_price():,}")
+                if themarketitem.is_profit():
+                    if n==0 :
+                        print(f"{thestockitem.name} sell_price={thestockitem.get_sell_price():,}")
+                        summary.append(f"{thestockitem.name}, sell_price={thestockitem.get_sell_price():,} Profit={themarketitem.get_profit():,} market_amount={themarketitem.market_amount:,}")
+                    print(f"\tProfit={themarketitem.get_profit():,} market_amount={themarketitem.market_amount:,}")
+                    n += 1
+                else:
+                    print(f"{thestockitem.name} {themarketitem.market_price:,} {thestockitem.sell_price:} x {themarketitem.market_amount }")
+                    if n == 0:
+                        print(f"{thestockitem.name} sell_price={thestockitem.get_sell_price():,} market_price={themarketitem.get_market_price():,} No items to buy")
+                    break
+        for line in top3items:
+            print(line)
         print("--------------------------------")
         if summary:
             for line in summary:
                 print(line)
         else:
             print(f"Nothing to buy")
+        #python3 readlog.py --getmarketprices --nolog --itemstotrack 419,45,197,206
+        
+        if False:
+            print(f"Bazaar")
+            for itemtotrack in items:
+                res = get_cur('SELECT player_id, name , price, quantity FROM bazaar WHERE item_id = ? ORDER BY price', args=( itemtotrack,))
+                thestockitem = stockitem(item_id = itemtotrack)
+                thestockitem.get_attrib_fromdb()
+                for row in res:
+                    print(f"{row[0]} {row[1]} {row[2]} x {row[3]} ")
+            print("Done Bazaar")
 
                     #item_id=row[0], name=row[1],sell_price=row[2], market_price=item['price'])
                     #print(f"Price: {item['price']}, Amount: {item['amount']}, ")
                     
     if args.getplayerbyid:
         if args.getplayerbyid == 'me':
-            pp = playerprofile('me',forceapi=True)
+            pp = playerprofile('me')
+            print(pp.getattrib('lastactionstatus'), pp.getattrib('lastactionrelative'),  timestamptodate(pp.getattrib('lastactiontimestamp')), 
+            pp.getattrib('otheractivitytime') 
+            )
+            seconds = pp.getattrib('otheractivitytime')
+            #d = seconds // 60 * 60 * 24
+            #h = (seconds-d*60*60 * 24)// (60 * 60)
+            #m = (seconds-h*60*60)//60
+            #s = seconds-(h*60*60)-(m*60)
+
+            #print(f"{seconds}: {d}D { h }H {m}M {s}S ")
+
             print(f"""Player {pp.getattrib('name')}, level {pp.getattrib('level')}, age {pp.getattrib('age')} {pp.getattrib('statusdescription')} 
             Attacks {pp.getattrib('attackingattackswon')}, Drugs {pp.getattrib('drugstotal')}, Xan {pp.getattrib('drugsxanax')}""")
 
         else:
             playerselection = (args.getplayerbyid + ',,').split(',')
-            pp = playerprofile(playerselection[0],forceapi=True)
+            pp = playerprofile(playerselection[0])
+            if not pp.profile_isrecent():
+                pp.getapi_playerprofile()
             print(f"""Player {pp.getattrib('name')}, level {pp.getattrib('level')}, age {pp.getattrib('age')} {pp.getattrib('statusdescription')} 
             Attacks {pp.getattrib('attackingattackswon')}, Drugs {pp.getattrib('drugstotal')}, Xan {pp.getattrib('drugsxanax')}""")
 
@@ -720,34 +805,47 @@ def main():
         f.print_faction_members()
 
     if args.getbazaar or args.getbazaarfile:
+        #python3 readlog.py --getbazaarfile marketsellers.txt
+        #python3 readlog.py --getbazaarfile ecstacyprofiles.txt
         playerids = []
         if args.getbazaarfile:
             with open(args.getbazaarfile) as fin:
-                playerids = fin.read().splitlines()
+                playeridsfile = fin.read().splitlines()
+            for pid in playeridsfile:
+                if pid.startswith('#'):
+                    continue
+                pid = pid.split('#')[0].strip()
+                if not pid:
+                    continue
+                if pid in playerids:
+                    continue
+                else:
+                    playerids.append(pid)
         else:
             playerids = (args.getbazaar,)
+        n = 0
         for pid in playerids:
+            n+=1
             timediff = (datetime.now() - timestart).total_seconds() / 60
-            print(f"Api called {apicount} times. Started {timestart} duration {timediff} minutes. Approximately {apicount / timediff} API per minute.")
-            print(f"Processing player {pid}")
+            #
+            pp = playerprofile(playerid=pid)
+            if not pp.exists_db():
+                pp.getapi_playerprofile()
+            #print(f"{n}/{len(playerids) }Processing player {pid} {pp.name}")
             f = bazaar(player_id=pid) 
-            if f.get_bazaar_age() is not None and f.get_bazaar_age() <( 30 if args.dbage is None else float( args.dbage)):
-                print(f"Skipping player {pid} because the bazaar is <{'30' if args.dbage is None else args.dbage} mins old it is {f.get_bazaar_age() }")
+            if f.get_bazaar_age() is not None and f.get_bazaar_age() < ( 30 if args.dbage is None else float( args.dbage)):
+                print(f"{n}/{len(playerids)} Skipping player {pp.name} {pid} because the bazaar is <{'30' if args.dbage is None else args.dbage} mins old it is {f.get_bazaar_age() }")
                 continue
-            if not args.noplayerstats:
-                dlog.debug(f"Getting player profile for {pid}")
-                f.get_player_profile()
             f.delete_bazaar_items()
             f.get_bazaar_items()
             f.update_db()
             bitems = {}
-            print(f"Total bazaar items = {len(f.items_list)}")
+            print(f"{n}/{len(playerids)} {pp.name} {pid} Total bazaar items = {len(f.items_list)} Api called {apicount} times, approximately {apicount / timediff} per min.")
             #for i in f.items_list:
             #    print(f"{i.name} Price={i.price} Sell={i.sell_price} profit={i.get_profit()}" )
             #    if i.get_profit() is not None and i.get_profit()>=0 and i.price >1:
             #        print(f"{i.name} ispr") 
             #        bitems[i.name] = f"Price={i.price} Sell={i.sell_price} profit={i.get_profit()}" 
-            print("---------------")
             for key,value in bitems.items():
                 print(f"{key} {value}" )
         sql = "UPDATE bazaar SET sell_price = i.sell_price FROM (select item_id, sell_price FROM item) as i where i.item_id = bazaar.item_id"
@@ -761,9 +859,22 @@ def main():
         print(f"Bazaar items that can be sold at a profit")
         for row in res:
             print (f"{row[0]}/{row[1]} {row[2]} {row[4]}")
-
+        items = []
+        if args.getmarketfile:
+            with open(args.getmarketfile) as fin:
+                items = fin.read().splitlines()
+        else:
+            items = secrets['itemstotrack']
+        for itemtotrack in items:
+            res = get_cur('SELECT player_id, name , price, quantity FROM bazaar WHERE item_id = ? ORDER BY price', args=( itemtotrack,)).fetchone()
+            thestockitem = stockitem(item_id = itemtotrack)
+            thestockitem.get_attrib_fromdb()
+            for row in res:
+                print(f"{res[0]} {res[1]} {res[2]} x {res[3]} ")
+        print("Done Bazaar")
 
     if args.readtextfiles:
+        #python3 readlog.py --readtextfiles --outfile warmembers.txt
         readtextfile()
 
     if args.dbtocsv:
@@ -806,10 +917,9 @@ class playerprofile:
     profilejson = None
     fieldnames = None
     profile_age = None    
-    forceapi = False
     personalstatsjson = None
-    def __init__(self, playerid = None, forceapi=False):
-        self.forceapi = forceapi
+    name = None
+    def __init__(self, playerid = None):
         if playerid == 'me':
             self.get_profile_me()
             self.get_personalstats()
@@ -817,8 +927,9 @@ class playerprofile:
             self.playerid = playerid
             if not self.exists_db():
                 self.insertplayerid()
-            if not self.profile_isrecent():
-                self.getapi_playerprofile()
+#    def  
+#                if not self.profile_isrecent():
+#                self.getapi_playerprofile()
     def getattrib(self, value):
         if self.profilejson.get(value,''):
             return self.profilejson.get(value,'')
@@ -827,11 +938,12 @@ class playerprofile:
         return ''
     def exists_db(self):
         if self.existsdb is None:
-            debuglog(f"playerprofile getting profile age {self.playerid}")
-            res = get_cur(sql='SELECT (julianday(current_timestamp) -julianday(profileupdateon)) * 24 * 60  FROM playerprofile WHERE playerid=?',args=(self.playerid ,)).fetchone()
+            dlog.debug(f"playerprofile getting profile age {self.playerid}")
+            res = get_cur(sql='SELECT (julianday(current_timestamp) -julianday(profileupdateon)) * 24 * 60 , name FROM playerprofile WHERE playerid=?',args=(self.playerid ,)).fetchone()
             if res is not None:
                 self.existsdb = True
                 self.profile_age = res[0]
+                self.name = res[1]
             else:
                 self.existsdb = False
         return self.existsdb    
@@ -840,7 +952,6 @@ class playerprofile:
         # 'https://api.torn.com/v2/user/1326025/personalstats?cat=popular&stat=' -- player personal stats
         dlog.message('Getting my personal stats from API')
         self.personalstatsjson = get_api(section='user',selections='personalstats')
-
     def get_personalstats(self):
         # https://api.torn.com/v2/user/1326025/personalstats?cat=popular&stat=
         dlog.message(f'Getting personal stats for {self.playerid} from API')
@@ -856,6 +967,7 @@ class playerprofile:
         
         dlog.debug(f'my profile json {self.profilejson}')
         self.playerid = self.getattrib('playerid')
+        self.name =  self.getattrib('name')
         dlog.debug(f"My playerid = {self.playerid}")
         self.insertplayerid()
         self.update_db()
@@ -863,11 +975,9 @@ class playerprofile:
         self.exists_db()
         return self.profile_age
     def profile_isrecent(self):
-        if self.forceapi:
-            return False
         if self.profile_age is None:
             return False
-        elif self.profile_age < 30:
+        elif self.profile_age < ( 30 if args.dbage is None else float( args.dbage) ):
             return True
         return False
     def insertplayerid(self):
@@ -882,6 +992,7 @@ class playerprofile:
         dlog.message(f"Getting playerprofile from API for {self.playerid}")
         self.profilejson = get_api(section='user',selections='profile', id=str(self.playerid))
         self.profilejson = flatten_json(self.profilejson,cleankey=True, delimiter='')
+        self.name = self.profilejson['name']
         self.update_db()
     def update_db(self):
         # this is why ORMs like Alchemy or Django exist
@@ -937,6 +1048,10 @@ class playerlog:
             return self.data['attacker']
         elif self.log_type == 5361: # bust receive success
             return self.data['buster']
+        elif self.log_type == 1113: # item market sell
+            return self.data['buyer']
+        elif self.log_type == 1112: # item market buy
+            return self.data['seller']
         else:
             return None
 
@@ -956,7 +1071,11 @@ class stockitem:
     item_id = None
     name = None
     sell_price = 0
-
+    buy_price = None
+    market_price = None 
+    monitorprice = None
+    label = None
+    updated_on = None
     def __init__(self,**kwargs):
     # call the super by using super().__init__(**kwargs)
         for k,v in kwargs.items():
@@ -966,6 +1085,16 @@ class stockitem:
             return 0
         else:
             return self.sell_price
+    def get_attrib_fromdb(self):
+        res = get_cur('SELECT updated_on, name, buy_price, sell_price, market_price, monitorprice, label FROM item WHERE item_id = ?', (self.item_id,)).fetchone()
+        self.updated_on = res[0]
+        self.name = res[1]
+        self.buy_price = res[2]
+        self.sell_price = res[3]
+        self.market_price = res[4]
+        self.monitorprice = res[5]
+        self.label = res[6]
+        return res
 class marketitem(stockitem):
     stockitem = None
     market_price = 0
@@ -984,6 +1113,7 @@ class marketitem(stockitem):
             return 0
         else:
             return self.market_price
+
 
 class faction:
     faction_id = None
@@ -1037,19 +1167,24 @@ class bazaar:
     items_json = None
     items_list = []
     bazaar_age = None
-    player_profile = None
     def __init__(self,**kwargs):
         #super().__init__(**kwargs)
         self.items_list = []
         for k,v in kwargs.items():
             setattr(self,k,v)
-    def get_player_profile(self):
-        if not self.player_profile:
-            self.player_profile = playerprofile(playerid=self.player_id)
-        return self.player_profile
         
     def get_bazaar_items(self):
-        self.items_json = get_api(section='user', selections='bazaar', id=str(self.player_id))['bazaar']
+
+        resp=None
+        try:
+            resp=  get_api(section='user', selections='bazaar', id=str(self.player_id))
+            self.items_json = resp['bazaar']
+
+        except Exception as e:
+            print(f"!! ERROR getting bazaar_items for {self.player_id} {e} json={self.items_json} response={resp} !!")
+            sys.exit()
+        if not self.items_json:
+            return None
         for bitem in self.items_json:
             bi = bazaaritem()
             bi.attribfromjson(bitem)
@@ -1060,7 +1195,7 @@ class bazaar:
         execute_sql("DELETE FROM bazaar WHERE player_id = ?", (self.player_id, ))
     def get_bazaar_age(self):
         if self.bazaar_age is None:
-            debuglog(f"Getting age of bazaar for {self.player_id}")
+            dlog.debug(f"Getting age of bazaar for {self.player_id}")
             res = get_cur(sql='SELECT (julianday(current_timestamp) - min(julianday(updateon))) * 24 * 60  FROM bazaar WHERE player_id=?',
                 args=(self.player_id ,)).fetchone()
             if res is not None: 
