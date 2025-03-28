@@ -41,6 +41,7 @@ parser.add_argument("--noplayerstats", action="store_true",  help="Don't refresh
 parser.add_argument("--sleep",   help="How long in seconds to sleep to throttle the API. Default=0.6s")
 parser.add_argument("--dbage",   help="API refreshed if age > dbage. Default = 30mins")
 parser.add_argument("--showsecrets", action="store_true",  help="List the prepared statement names")
+parser.add_argument("--dryrun", action="store_true",  help="Do a run using the last 100 log entries in the base API")
 
 
 
@@ -177,8 +178,11 @@ def get_api(section, selections='', cat='', ts_to='', ts_from='', id='', slug=''
             (('&id=' + id ) if id else '') 
             )
         headers = {'Authorization':'ApiKey '+ secrets['apikey']}    
-    dlog.debug(f">{apicount} Calling api v{version} {apiendpoint}")
-    # print(f"{apicount} Calling api v{version} {apiendpoint}")
+    dlog.debug(f">{apicount} Calling api v{version} {apiendpoint} " +
+        (f"ts_from={timestamptodate(ts_from)}" if ts_from else '') + 
+        (f"ts_to={timestamptodate(ts_to)}" if ts_to else '') )
+    #print(f"{apicount} Calling api v{version} {apiendpoint}")
+    
     response = requests.get(apiendpoint, headers = headers)
     apicount += 1
     timediff = (datetime.now() - timestart).total_seconds() / 60
@@ -193,10 +197,10 @@ def get_api(section, selections='', cat='', ts_to='', ts_from='', id='', slug=''
         return None
     dlog.debug(f">Got api response {meme}")
     return meme
-    
-def flatten_json(y,cleankey=False, delimiter = '.'):
+     
+def flatten_json(y,cleankey=False, delimiter = '.', name=''):
     out = {}
-    def flatten(x, name=''):
+    def flatten(x, name=name):
         if type(x) is dict:
             for a in x:
                 flatten(x[a], name + a + delimiter)
@@ -238,6 +242,7 @@ def get_log():
 
 def timestamptodate(ts):
     if ts:
+        ts=int(ts)
         return datetime.fromtimestamp(ts).isoformat()
     else:
         return None
@@ -621,12 +626,13 @@ def execute_sql(sql, args=None, many=False):
         dbcon.execute(sql, args)
     dbcon.commit()
 
-def writelogtodb(thelog):
+def writelogtodb(thelog, ts_stop = None):
         fieldnames = get_cur_list(sql="SELECT name FROM PRAGMA_TABLE_INFO('userlog')")
         sql1 = 'INSERT OR IGNORE INTO userlog (log_id, log_type, title, timestamp, torndatetime, data, params'
         sql2 = ' values (?,?,?,?,?,?,?'
         cur = dbcon.cursor()
         rowcount = 0
+        ts_lastread = None
         for key, value in thelog['log'].items():
             plog = playerlog(value)
             profile = playerprofile(plog.get_playerid())
@@ -639,7 +645,10 @@ def writelogtodb(thelog):
                 value['timestamp'], timestamptodate(value['timestamp']), 
                 json.dumps(value['data']), 
                 json.dumps(value['params'])]
-            for datakey, datavalue in value['data'].items():
+            valuedata = value['data'].copy()
+            if plog.items:
+                valuedata.update(plog.items)
+            for datakey, datavalue in valuedata.items():
                 datakey += '_'
                 if type(datavalue) is list:
                     datavalue =  str(datavalue)
@@ -652,9 +661,15 @@ def writelogtodb(thelog):
                     dbcon.execute('ALTER TABLE userlog ADD ' + datakey + ' TEXT')
                     fieldnames.append(datakey)
             sql3 += ') ' + sql4 + ')'
-            dlog.debug(f"writing to db {sql3} {theparams}")
+            #dlog.debug(f"writing to db {sql3} {theparams}")
+            #print(f"{rowcount} {timestamptodate(value['timestamp'])} {value['title']} ")
+            ts_lastread = value['timestamp']
+            if ts_lastread <= ts_stop:
+                dbcon.commit()
+                return 'HALT', ts_lastread
             cur.execute(sql3, theparams)
         dbcon.commit()
+        return 'OK', ts_lastread
 
 def main():
     global timestart
@@ -668,13 +683,15 @@ def main():
     res = get_cur(sql='SELECT MAX(timestamp) as max_timestamp, MIN(timestamp) as min_timestamp, count(*) FROM userlog').fetchone()
     max_timestamp = res[0]
     min_timestamp = res[1]
+    ts_stop = max_timestamp
+    ts_lastread = None
     logrowcount = res[2]
     maxcount=5
     itercount = 0
     
     if not args.nolog:
         if max_timestamp is None:
-            print('No downloaded userlog. Getting lastest log')    
+            print('No downloaded userlog. Getting latest log')    
             writelogtodb( get_log() )
             res = get_cur(sql='SELECT MAX(timestamp) as max_timestamp, MIN(timestamp) as min_timestamp, count(*) FROM userlog').fetchone()
             max_timestamp = res[0]
@@ -690,21 +707,70 @@ def main():
             print(f'Earliest log entry {min_timestamp} {timestamptodate(min_timestamp)}')
             print(f'Total log rows {logrowcount} ')
             reslogcount = 0
-            reslog = get_api(section='user',selections='log', ts_from=str(max_timestamp +1))
+            reslog = get_api(section='user',selections='log', )
             while reslog['log']:
                 reslogcount += 1
-                print(f"{reslogcount} Getting next log batch from {max_timestamp} ({timestamptodate(max_timestamp + 1)})")
-                writelogtodb( reslog )
-                res = get_cur(sql='SELECT MAX(timestamp) as max_timestamp, MIN(timestamp) as min_timestamp, count(*) FROM userlog').fetchone()
-                max_timestamp = res[0]
-                min_timestamp = res[1]
-                logrowcount = res[2]
-                print(f"The latest timestamp is {max_timestamp} ({timestamptodate(max_timestamp)}, the numer of rows is {logrowcount})")
-                reslog = get_api(section='user',selections='log', ts_from=str(max_timestamp + 1))
-                if reslogcount > 10:
-                    print('Halting...')
+                dlog.message(f"{reslogcount} Getting next log batch from {max_timestamp} ({timestamptodate(max_timestamp + 1)})")
+                status, ts_lastread = writelogtodb( reslog , ts_stop = max_timestamp )
+                dlog.debug(f"{status} {ts_lastread} {timestamptodate(ts_lastread)}")
+                if status == 'HALT':
+                    dlog.message(f"Got to the existing entry, therefore halting {min_timestamp} {timestamptodate(min_timestamp)}")
+                    break
+                reslog = get_api(section='user',selections='log', ts_to=str(ts_lastread - 1))
+                if reslogcount > 50:
+                    print('Halting due to >50 break ...')
                     sys.exit()
+            res = get_cur(sql='SELECT MAX(timestamp) as max_timestamp, MIN(timestamp) as min_timestamp, count(*) FROM userlog').fetchone()
+            max_timestamp = res[0]
+            min_timestamp = res[1]
+            logrowcount = res[2]
+            print(f"DONE The latest timestamp is {max_timestamp} ({timestamptodate(max_timestamp)}, the numer of rows is {logrowcount})")
     
+    if args.dryrun:
+        thelog =  get_log() 
+        fieldnames = get_cur_list(sql="SELECT name FROM PRAGMA_TABLE_INFO('userlog')")
+        sql1 = 'INSERT OR IGNORE INTO userlog (log_id, log_type, title, timestamp, torndatetime, data, params'
+        sql2 = ' values (?,?,?,?,?,?,?'
+        rowcount = 0
+        for key, value in thelog['log'].items():
+            plog = playerlog(value)
+            profile = playerprofile(plog.get_playerid())
+            rowcount += 1
+            if plog.log_type == 1225: # bazaar buy
+                print(f"Log type 1225 bazaar buy")
+                pass
+            else:
+                continue
+            #print_flush(f"{rowcount} {timestamptodate(value['timestamp'])} {value['title']}")
+            print(f"{rowcount} {timestamptodate(value['timestamp'])} {value['title']}")
+            sql3 = sql1
+            sql4 = sql2
+            theparams = [key, 
+                value['log'], value['title'],
+                value['timestamp'], timestamptodate(value['timestamp']), 
+                json.dumps(value['data']), 
+                json.dumps(value['params'])]
+            valuedata = value['data'].copy()
+            if plog.items:
+                valuedata.update(plog.items)
+            for datakey, datavalue in valuedata.items():
+                datakey += '_'
+                if type(datavalue) is list:
+                    datavalue =  str(datavalue)
+                elif type(datavalue) is dict:
+                    datavalue =  str(datavalue)
+                sql3 += ',' + datakey
+                sql4 += ',?'
+                theparams.append(datavalue)
+                if datakey not in fieldnames:
+                    fieldnames.append(datakey)
+            sql3 += ') ' + sql4 + ')'
+            dlog.debug(f"writing to db {sql3} {theparams}")
+            print(f"DRY RUN {sql3} {theparams}")
+        
+
+
+
     if args.showsecrets:
         #python3 readlog.py --showsecrets
         print(f"Secrets: {secrets}")
@@ -1034,6 +1100,7 @@ class playerlog:
     timestamp_iso = None
     data = None
     params = None
+    items=None ####
     def __init__(self, values):
         self.log_type = values['log']
         self.title = values['title']
@@ -1041,6 +1108,11 @@ class playerlog:
         self.timestamp_iso = timestamptodate(self.timestamp)
         self.data = values['data']
         self.params = values['params']
+        self.items = None
+        if self.data.get('items', None):
+            self.items = flatten_json(self.data['items'],cleankey=True, delimiter='', name='i')
+    
+        
     def get_playerid(self):
         if self.log_type == 1225: # bazaar buy
             return self.data['seller']

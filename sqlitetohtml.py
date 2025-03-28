@@ -61,7 +61,36 @@ SQLPREPARED={'allitems':"SELECT item_id, name, sell_price , label, monitorprice 
     '1dsellers':"""SELECT b.player_id, p.name , COUNT(*) as total 
     FROM bazaar b 
     LEFT JOIN playerprofile p ON b.player_id = p.playerid  
-    WHERE price =1 GROUP BY b.player_id, p.name order by 3 desc;"""}
+    WHERE price =1 GROUP BY b.player_id, p.name order by 3 desc;""",
+    'trading':"""SELECT ll.torndatetime, ll.title, i.name, ll.quantity, ll.value, ll.total_value, ll.fee 
+            FROM (
+            SELECT l.timestamp, l.log_type, l.title, l.torndatetime, l.fee_ as fee, 
+            CASE
+                WHEN l.log_type in (4201, 4200, 4210) THEN item_
+                WHEN l.log_type in (1113, 1226, 1112, 1225) THEN i0id_
+                ELSE -999
+            END as item_id,
+            CASE
+                WHEN l.log_type in (4201, 4200, 4210) THEN quantity_
+                WHEN l.log_type in (1113, 1226, 1112, 1225) THEN i0qty_
+                ELSE -999
+            END as quantity,
+            CASE
+                WHEN l.log_type in (4210) THEN value_each_
+                WHEN l.log_type in (1113, 1226, 1112, 1225, 4200, 4201) THEN cost_each_
+                ELSE -999
+            END as value,
+            CASE
+                WHEN l.log_type in (4210) THEN total_value_
+                WHEN l.log_type in (1113, 1226, 1112, 1225, 4200, 4201) THEN cost_total_
+                ELSE -999
+            END as total_value
+            FROM userlog as l
+            WHERE l.log_type in (1113, 4210, 1226, 1112, 1225, 4200, 4201)
+            ) AS ll
+            LEFT JOIN item i ON ll.item_id = i.item_id
+            ORDER BY ll.timestamp DESC
+        """}
 
 
 if args.debugsql:
