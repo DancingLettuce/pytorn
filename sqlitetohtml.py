@@ -17,6 +17,7 @@ import csv
     # sqlite viewer online with export-to-csv https://inloop.github.io/sqlite-viewer/
     # sqlite viewer with refresh https://sqliteviewer.app/#/pytorn.db/table/userlog/
     # json viewer https://jsonformatter.org/
+    # p full gf
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--dbfile", help="Database file name. Stored after first use")
@@ -59,10 +60,11 @@ dlog = debuglog()
 SQLPREPARED={'allitems':"SELECT item_id, name, sell_price , label, monitorprice FROM item ORDER BY item_id",
     'allcompany': 'SELECT company_id, name FROM COMPANY ORDER BY company_id',
     '1dsellers':"""SELECT b.player_id, p.name , COUNT(*) as total 
-    FROM bazaar b 
-    LEFT JOIN playerprofile p ON b.player_id = p.playerid  
-    WHERE price =1 GROUP BY b.player_id, p.name order by 3 desc;""",
-    'trading':"""SELECT ll.torndatetime, ll.title, i.name, ll.quantity, ll.value, ll.total_value, ll.fee 
+        FROM bazaar b 
+        LEFT JOIN playerprofile p ON b.player_id = p.playerid  
+        WHERE price =1 GROUP BY b.player_id, p.name order by 3 desc;""",
+    'trading':"""SELECT ll.torndatetime, ll.title, i.name, ll.quantity, ll.value, ll.total_value, ll.fee ,
+            (ll.total_value - ll.fee) / ll.quantity as unit_price
             FROM (
             SELECT l.timestamp, l.log_type, l.title, l.torndatetime, l.fee_ as fee, 
             CASE

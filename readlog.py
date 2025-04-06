@@ -10,12 +10,19 @@ import os
 import re
 import time
 import csv
-# v18
+# v19
 #
     # sqlite viewer online with export-to-csv https://inloop.github.io/sqlite-viewer/
     # sqlite viewer with refresh https://sqliteviewer.app/#/pytorn.db/table/userlog/
     # json viewer https://jsonformatter.org/
-
+    #         Ctrl+Shift+[    Fold (collapse) region  editor.fold
+    # Ctrl+Shift+]    Unfold (uncollapse) region  editor.unfold
+    # Ctrl+K Ctrl+[   Fold (collapse) all subregions  editor.foldRecursively
+    # Ctrl+K Ctrl+]   Unfold (uncollapse) all subregions  editor.unfoldRecursively
+    # Ctrl+K Ctrl+0   Fold (collapse) all regions editor.foldAll
+    # Ctrl+K Ctrl+J   Unfold (uncollapse) all regions
+    # Ctrl+K Ctrl+1   Fold Level 1 (2 for level 2, 3 for level 3 and so on)
+ 
 parser = argparse.ArgumentParser()
 parser.add_argument("-api", "--apikey", help="Api key. Stored after first use")
 parser.add_argument("--truncatereference", action="store_true",  help="Reload and rebuild the reference tables Item, Logtype, LogCategory.")
@@ -38,11 +45,11 @@ parser.add_argument("--outfile",   help="Export output to file")
 parser.add_argument("--outfilehtml",   help="Export output to file but with HTML links ")
 parser.add_argument("--dbtocsv",   help="Output DB table to csv, set --outfile if needed")
 parser.add_argument("--noplayerstats", action="store_true",  help="Don't refresh player stats")
-parser.add_argument("--sleep",   help="How long in seconds to sleep to throttle the API. Default=0.6s")
+parser.add_argument("--sleep",   help="How long in seconds to sleep to throttle the API. Default=5s")
 parser.add_argument("--dbage",   help="API refreshed if age > dbage. Default = 30mins")
 parser.add_argument("--showsecrets", action="store_true",  help="List the prepared statement names")
 parser.add_argument("--dryrun", action="store_true",  help="Do a run using the last 100 log entries in the base API")
-
+parser.add_argument("--logstart",   help="Timestamp to go back to")
 
 
 
@@ -154,9 +161,9 @@ def readtextfile():
 def get_api(section, selections='', cat='', ts_to='', ts_from='', id='', slug='', urlbreadcrumb='', version=2):
     global apicount
     timediff = (datetime.now() - timestart).total_seconds() / 60
-    if apicount / timediff >= 97:
-        print(f"Pausing for {'0.6' if args.sleep is None else args.sleep} seconds")
-        time.sleep(0.6 if args.sleep is None else float(args.sleep))
+    if apicount / timediff >= 90:
+        print(f"Pausing for {'5' if args.sleep is None else args.sleep} seconds")
+        time.sleep(5 if args.sleep is None else float(args.sleep))
     headers = None
     if version == 1:
         apiurl_v1 = 'https://api.torn.com/'
@@ -322,7 +329,7 @@ def init_database():
         execute_sql("DROP TABLE playerprofile")
     if args.truncatereference:
         execute_sql("DROP TABLE IF EXISTS item")
-        dexecute_sql("DROP TABLE IF EXISTS logtype")
+        execute_sql("DROP TABLE IF EXISTS logtype")
         execute_sql("DROP TABLE IF EXISTS logcategory")
         execute_sql("DROP TABLE IF EXISTS company")
     if args.truncatecompany:
@@ -634,6 +641,7 @@ def writelogtodb(thelog, ts_stop = None):
         rowcount = 0
         ts_lastread = None
         for key, value in thelog['log'].items():
+            value['data'] = value.get('data',{})
             plog = playerlog(value)
             profile = playerprofile(plog.get_playerid())
             rowcount += 1
@@ -664,7 +672,7 @@ def writelogtodb(thelog, ts_stop = None):
             #dlog.debug(f"writing to db {sql3} {theparams}")
             #print(f"{rowcount} {timestamptodate(value['timestamp'])} {value['title']} ")
             ts_lastread = value['timestamp']
-            if ts_lastread <= ts_stop:
+            if ts_stop and (ts_lastread <= ts_stop):
                 dbcon.commit()
                 return 'HALT', ts_lastread
             cur.execute(sql3, theparams)
@@ -690,7 +698,7 @@ def main():
     itercount = 0
     
     if not args.nolog:
-        if max_timestamp is None:
+        if (not args.logstart) and (max_timestamp is None):
             print('No downloaded userlog. Getting latest log')    
             writelogtodb( get_log() )
             res = get_cur(sql='SELECT MAX(timestamp) as max_timestamp, MIN(timestamp) as min_timestamp, count(*) FROM userlog').fetchone()
@@ -702,22 +710,29 @@ def main():
             print(f'Earliest log entry {min_timestamp} {timestamptodate(min_timestamp)}')
             print(f'Total log rows {logrowcount} ')
         else:
-            print("A log exists in the local database")
-            print(f'Latest log entry {max_timestamp} {timestamptodate(max_timestamp)}')
-            print(f'Earliest log entry {min_timestamp} {timestamptodate(min_timestamp)}')
-            print(f'Total log rows {logrowcount} ')
+            if not args.logstart:
+                print("A log exists in the local database")
+                print(f'Latest log entry {max_timestamp} {timestamptodate(max_timestamp)}')
+                print(f'Earliest log entry {min_timestamp} {timestamptodate(min_timestamp)}')
+                print(f'Total log rows {logrowcount} ')
+            else:
+                # 1741088705
+                max_timestamp = int(args.logstart)
+                dlog.message(f"logstart is {args.logstart} {timestamptodate(args.logstart)}")
             reslogcount = 0
+            dlog.message(f"Getting most recent log file")
             reslog = get_api(section='user',selections='log', )
             while reslog['log']:
                 reslogcount += 1
-                dlog.message(f"{reslogcount} Getting next log batch from {max_timestamp} ({timestamptodate(max_timestamp + 1)})")
+                #dlog.message(f"{reslogcount} Getting next log batch from {max_timestamp} ({timestamptodate(max_timestamp + 1)})")
                 status, ts_lastread = writelogtodb( reslog , ts_stop = max_timestamp )
-                dlog.debug(f"{status} {ts_lastread} {timestamptodate(ts_lastread)}")
+                dlog.message(f"Got log file {status} Last log entry is {ts_lastread} {timestamptodate(ts_lastread)}")
                 if status == 'HALT':
                     dlog.message(f"Got to the existing entry, therefore halting {min_timestamp} {timestamptodate(min_timestamp)}")
                     break
+                dlog.message(f"Getting log to event {ts_lastread - 1}")
                 reslog = get_api(section='user',selections='log', ts_to=str(ts_lastread - 1))
-                if reslogcount > 50:
+                if reslogcount > 5000000:
                     print('Halting due to >50 break ...')
                     sys.exit()
             res = get_cur(sql='SELECT MAX(timestamp) as max_timestamp, MIN(timestamp) as min_timestamp, count(*) FROM userlog').fetchone()
@@ -1106,8 +1121,8 @@ class playerlog:
         self.title = values['title']
         self.timestamp = values['timestamp']
         self.timestamp_iso = timestamptodate(self.timestamp)
-        self.data = values['data']
-        self.params = values['params']
+        self.data = values.get('data',{})
+        self.params = values.get('params',{})
         self.items = None
         if self.data.get('items', None):
             self.items = flatten_json(self.data['items'],cleankey=True, delimiter='', name='i')
