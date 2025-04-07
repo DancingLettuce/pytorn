@@ -10,18 +10,12 @@ import os
 import re
 import time
 import csv
-# v19
+# v21
 #
     # sqlite viewer online with export-to-csv https://inloop.github.io/sqlite-viewer/
     # sqlite viewer with refresh https://sqliteviewer.app/#/pytorn.db/table/userlog/
     # json viewer https://jsonformatter.org/
-    #         Ctrl+Shift+[    Fold (collapse) region  editor.fold
-    # Ctrl+Shift+]    Unfold (uncollapse) region  editor.unfold
-    # Ctrl+K Ctrl+[   Fold (collapse) all subregions  editor.foldRecursively
-    # Ctrl+K Ctrl+]   Unfold (uncollapse) all subregions  editor.unfoldRecursively
-    # Ctrl+K Ctrl+0   Fold (collapse) all regions editor.foldAll
-    # Ctrl+K Ctrl+J   Unfold (uncollapse) all regions
-    # Ctrl+K Ctrl+1   Fold Level 1 (2 for level 2, 3 for level 3 and so on)
+
  
 parser = argparse.ArgumentParser()
 parser.add_argument("-api", "--apikey", help="Api key. Stored after first use")
@@ -50,8 +44,6 @@ parser.add_argument("--dbage",   help="API refreshed if age > dbage. Default = 3
 parser.add_argument("--showsecrets", action="store_true",  help="List the prepared statement names")
 parser.add_argument("--dryrun", action="store_true",  help="Do a run using the last 100 log entries in the base API")
 parser.add_argument("--logstart",   help="Timestamp to go back to")
-
-
 
 args = parser.parse_args()
 secrets = {}
@@ -783,9 +775,6 @@ def main():
             dlog.debug(f"writing to db {sql3} {theparams}")
             print(f"DRY RUN {sql3} {theparams}")
         
-
-
-
     if args.showsecrets:
         #python3 readlog.py --showsecrets
         print(f"Secrets: {secrets}")
@@ -990,7 +979,6 @@ def flattenjson():
                 jsonfields.append(key)
     print(f"The keys are {jsonfields}")
 
-
 class playerprofile:
     playerattribute = {}
     playerid = None
@@ -1126,7 +1114,6 @@ class playerlog:
         self.items = None
         if self.data.get('items', None):
             self.items = flatten_json(self.data['items'],cleankey=True, delimiter='', name='i')
-    
         
     def get_playerid(self):
         if self.log_type == 1225: # bazaar buy
@@ -1310,7 +1297,6 @@ class bazaar:
         dlog.debug(f"Attempting to update bazaar for player id {self.player_id} {sql} ")
         execute_sql(sql, args=paramslist,many=True )
     
-
 class bazaaritem:
     item_id = None
     name = None
