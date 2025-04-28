@@ -10,7 +10,7 @@ import os
 import re
 import time
 import csv
-# v21
+# v22
 #
     # sqlite viewer online with export-to-csv https://inloop.github.io/sqlite-viewer/
     # sqlite viewer with refresh https://sqliteviewer.app/#/pytorn.db/table/userlog/

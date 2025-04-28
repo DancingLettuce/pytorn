@@ -1,6 +1,6 @@
 # sqlite to html templating
 # output to csv 
-# v1
+# v2
 
 import argparse
 import sys
@@ -14,7 +14,7 @@ import re
 import time
 import csv
 
-    # sqlite viewer online with export-to-csv https://inloop.github.io/sqlite-viewer/
+    # sqlite sql query online with export-to-csv  https://inloop.github.io/sqlite-viewer/
     # sqlite viewer with refresh https://sqliteviewer.app/#/pytorn.db/table/userlog/
     # json viewer https://jsonformatter.org/
     # p full gf
@@ -31,6 +31,8 @@ parser.add_argument("--outfile",   help="Export output to file")
 parser.add_argument("--template",   help="Template to format HTML")
 parser.add_argument("--infile",   help="Import from a file")
 parser.add_argument("--updatetable",   help="Update table from file")
+parser.add_argument("--param1",  help="parameter for ssqlprepared")
+
 
 
 
@@ -57,6 +59,7 @@ secrets = {}
 dbcon = None
 timestart = datetime.now()
 dlog = debuglog()
+# 1113 = item market sell
 SQLPREPARED={'allitems':"SELECT item_id, name, sell_price , label, monitorprice FROM item ORDER BY item_id",
     'allcompany': 'SELECT company_id, name FROM COMPANY ORDER BY company_id',
     '1dsellers':"""SELECT b.player_id, p.name , COUNT(*) as total 
@@ -64,7 +67,7 @@ SQLPREPARED={'allitems':"SELECT item_id, name, sell_price , label, monitorprice 
         LEFT JOIN playerprofile p ON b.player_id = p.playerid  
         WHERE price =1 GROUP BY b.player_id, p.name order by 3 desc;""",
     'trading':"""SELECT ll.torndatetime, ll.title, i.name, ll.quantity, ll.value, ll.total_value, ll.fee ,
-            (ll.total_value - ll.fee) / ll.quantity as unit_price
+            (ll.total_value ) / ll.quantity as unit_price
             FROM (
             SELECT l.timestamp, l.log_type, l.title, l.torndatetime, l.fee_ as fee, 
             CASE
@@ -92,7 +95,32 @@ SQLPREPARED={'allitems':"SELECT item_id, name, sell_price , label, monitorprice 
             ) AS ll
             LEFT JOIN item i ON ll.item_id = i.item_id
             ORDER BY ll.timestamp DESC
-        """}
+        """,
+        'recentprice':"""select torndatetime, name, cost_each_, quantity, soldfor_each from (
+    SELECT l.timestamp, l.title, l.torndatetime, i.name, 
+        l.cost_each_ , i.sell_price, 
+                l.cost_total_ ,
+                i0qty_ as quantity ,
+                l.cost_total_ / l.i0qty_ as soldfor_each,
+                row_number() over (partition by name order by name, timestamp desc) as rownumber
+            FROM userlog as l
+            LEFT JOIN item i ON l.i0id_ = i.item_id
+            WHERE l.log_type in (1113)
+            order by name, l.timestamp desc 
+            ) where rownumber = 1 and torndatetime >= "2025-04-20" """,
+    'recentpriceparam':"""select torndatetime, name, cost_each_, quantity, soldfor_each from (
+    SELECT l.timestamp, l.title, l.torndatetime, i.name, 
+        l.cost_each_ , i.sell_price, 
+                l.cost_total_ ,
+                i0qty_ as quantity ,
+                l.cost_total_ / l.i0qty_ as soldfor_each,
+                row_number() over (partition by name order by name, timestamp desc) as rownumber
+            FROM userlog as l
+            LEFT JOIN item i ON l.i0id_ = i.item_id
+            WHERE l.log_type in (1113)
+            order by name, l.timestamp desc 
+            ) where rownumber = 1 and torndatetime >= "2025-04-20" and name like "%?%" """,
+    }
 
 
 if args.debugsql:
@@ -165,6 +193,8 @@ def main():
         #python3 readlog.py --showsecrets
         print(f"Secrets: {secrets}")
 
+    if args.sqlprepared and args.param1:
+        SQLPREPARED[args.sqlprepared] = SQLPREPARED[args.sqlprepared].replace('?', args.param1)
     if args.outfile:
         if 'csv' in args.outfile:
             if args.sqlprepared:
