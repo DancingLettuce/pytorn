@@ -108,7 +108,7 @@ SQLPREPARED={'allitems':"SELECT item_id, name, sell_price , label, monitorprice 
             WHERE l.log_type in (1113)
             order by name, l.timestamp desc 
             ) where rownumber = 1 and torndatetime >= "2025-04-20" """,
-    'recentpriceparam':"""select torndatetime, name, cost_each_, quantity, soldfor_each from (
+    'sellpriceparam':"""select torndatetime, title, name, cost_each_, quantity, soldfor_each from (
     SELECT l.timestamp, l.title, l.torndatetime, i.name, 
         l.cost_each_ , i.sell_price, 
                 l.cost_total_ ,
@@ -120,6 +120,39 @@ SQLPREPARED={'allitems':"SELECT item_id, name, sell_price , label, monitorprice 
             WHERE l.log_type in (1113)
             order by name, l.timestamp desc 
             ) where rownumber = 1 and torndatetime >= "2025-04-20" and name like "%?%" """,
+    'buypriceparam':"""select torndatetime, title, name, cost_each_, i0qty_ 
+            FROM userlog as l
+            LEFT JOIN item i ON l.i0id_ = i.item_id
+            WHERE l.log_type in (1225,4201,1112)
+            and name like "%?%" 
+            order by l.timestamp desc 
+            LIMIT 20""",
+    'allpriceparam':"""SELECT 
+        --l.torndatetime, 
+        substr(l.torndatetime,1,10) as datetime,
+        i.name, 
+        l.title,  
+        case 
+            WHEN l.title like "%buy%" then "Buy"
+            WHEN l.title like "%sell%" then "Sell"
+            ELSE l.title
+        end as event,
+        i0qty_ as quantity ,
+        l.cost_each_ , 
+        --i.sell_price as shop_price, 
+        --        l.cost_total_ ,
+                case
+                WHEN l.log_type in (1113) THEN l.cost_total_ / l.i0qty_ 
+                ELSE NULL
+                END 
+                as soldfor_each
+            FROM userlog as l
+            LEFT JOIN item i ON l.i0id_ = i.item_id
+            WHERE l.log_type in (1113,1225,4201,1112)
+            and i.name like '%?%'
+            order by name, l.timestamp desc 
+        limit 100"""
+
     }
 
 
@@ -207,7 +240,8 @@ def main():
                     csvwriter.writerow(fields)
                     for row in res:
                         csvwriter.writerow(row)
-                        print(row)
+                        #print(row)
+                        print(",".join(map(lambda x: "" if x is None else str(x),row)))
                 print(f"Output written to {args.outfile} as CSV")
         elif 'html' in args.outfile:
             if args.sqlprepared:
