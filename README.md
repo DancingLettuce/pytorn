@@ -17,6 +17,18 @@ The script will read your Torn log and will download it into a local SQLite data
 
 You can open the SQLite database with tools like this [https://sqliteviewer.app/ ](https://sqliteviewer.app/#/pytorn.db/table/userlog/)
 
+How much did I sell and buy that item for?
+-------------------------------------------
+To review your buy and sell history for a specific item:
+* Download the latest log `python3 readlog.py`
+* Use the helper SQL **allpriceparam** to find the buy and sell history for the item by giving the name in **param1**
+* `python3 sqlitetohtml.py --sqlprepared allpriceparam --dbfile pytorn.db --outfile tmp.csv --param1 small` eg **param1** is 'small' so all items called 'small' are returned
+* Export to CSV and open in a spreadsheet for more analysis or just use the output that is sent to screen.  The helper script 
+![image](https://github.com/user-attachments/assets/cb3ce97d-60ec-4982-9289-a431cfb4174d)
+
+
+
+
 How Much Profit Have I Made?
 -----------------------------
 
