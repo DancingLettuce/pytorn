@@ -60,7 +60,7 @@ dbcon = None
 timestart = datetime.now()
 dlog = debuglog()
 # 1113 = item market sell
-SQLPREPARED={'allitems':"SELECT item_id, name, sell_price , label, monitorprice FROM item ORDER BY item_id",
+SQLPREPARED={'allitems':"SELECT item_id, name, sell_price , label, monitorprice, last_buyprice, last_sellprice FROM item ORDER BY item_id",
     'allcompany': 'SELECT company_id, name FROM COMPANY ORDER BY company_id',
     '1dsellers':"""SELECT b.player_id, p.name , COUNT(*) as total 
         FROM bazaar b 
@@ -94,9 +94,8 @@ SQLPREPARED={'allitems':"SELECT item_id, name, sell_price , label, monitorprice 
             WHERE l.log_type in (1113, 4210, 1226, 1112, 1225, 4200, 4201)
             ) AS ll
             LEFT JOIN item i ON ll.item_id = i.item_id
-            ORDER BY ll.timestamp DESC
-        """,
-        'recentprice':"""select torndatetime, name, cost_each_, quantity, soldfor_each from (
+            ORDER BY ll.timestamp DESC""",
+    'recentprice':"""select torndatetime, name, cost_each_, quantity, soldfor_each from (
     SELECT l.timestamp, l.title, l.torndatetime, i.name, 
         l.cost_each_ , i.sell_price, 
                 l.cost_total_ ,
@@ -109,7 +108,7 @@ SQLPREPARED={'allitems':"SELECT item_id, name, sell_price , label, monitorprice 
             order by name, l.timestamp desc 
             ) where rownumber = 1 and torndatetime >= "2025-04-20" """,
     'sellpriceparam':"""select torndatetime, title, name, cost_each_, quantity, soldfor_each from (
-    SELECT l.timestamp, l.title, l.torndatetime, i.name, 
+        SELECT l.timestamp, l.title, l.torndatetime, i.name, 
         l.cost_each_ , i.sell_price, 
                 l.cost_total_ ,
                 i0qty_ as quantity ,
@@ -127,6 +126,12 @@ SQLPREPARED={'allitems':"SELECT item_id, name, sell_price , label, monitorprice 
             and name like "%?%" 
             order by l.timestamp desc 
             LIMIT 20""",
+    'marketpriceparam':"""SELECT b.player_id, b.player_name, i.name, b.quantity, b.price , 
+        (i.sell_price - b.price) * b.quantity as profit
+        FROM bazaar b
+        left join item i on b.item_id = i.item_id 
+        where i.name like '%?%' 
+        order by 5 desc""",
     'allpriceparam':"""SELECT 
         --l.torndatetime, 
         substr(l.torndatetime,1,10) as datetime,
@@ -151,8 +156,84 @@ SQLPREPARED={'allitems':"SELECT item_id, name, sell_price , label, monitorprice 
             WHERE l.log_type in (1113,1225,4201,1112)
             and i.name like '%?%'
             order by name, l.timestamp desc 
-        limit 100"""
-
+        limit 100""", 
+    'marketprofitshop':"""
+        SELECT b.player_id, b.player_name, i.name, b.quantity, b.price , 
+        (i.sell_price - b.price) * b.quantity as profit, b.api
+        FROM bazaar b
+        left join item i on b.item_id = i.item_id 
+        where ( (i.sell_price - b.price) * b.quantity >= 500
+            OR b.price <= i.monitorprice)
+        order by 6 desc""" ,
+    'monitorprice':"""
+        SELECT b.player_id, b.player_name, i.name, b.quantity, b.price , 
+        i.monitorprice
+        FROM bazaar b
+        left join item i on b.item_id = i.item_id 
+        where  b.price <= i.monitorprice
+        order by 6 desc""" ,
+    'marketprofitshopgroup':"""
+        SELECT b.player_id, b.player_name,  b.api,
+        sum((i.sell_price - b.price) * b.quantity) as profit, count(*) as total
+        FROM bazaar b
+        left join item i on b.item_id = i.item_id 
+        where ( (i.sell_price - b.price) * b.quantity >= 500
+            OR b.price <= i.monitorprice)
+        group by 1,2,3
+        order by 4 """ ,
+    'marketprofitmarket':"""
+            SELECT b.player_id, b.player_name, i.name, b.quantity, b.price ,
+        (i.last_sellprice - b.price) * b.quantity as profit, '[' || i.last_sellprice 
+        FROM bazaar b
+        left join item i on b.item_id = i.item_id 
+        where i.last_buyprice >= b.price
+        and last_sellprice is not null
+        and price <=1000
+        and (i.last_sellprice - b.price) * b.quantity >=1000
+        order by 6""",
+    'profitperday':"""select day, 
+            --name, 
+            sum(profit) FROM (
+            select substr(torndatetime,1,10) as day, title, name, (i.sell_price - l.cost_each_) * i0qty_ as profit
+            FROM userlog as l
+            LEFT JOIN item i ON l.i0id_ = i.item_id
+            WHERE l.log_type in (1225,4201,1112)
+            and i.sell_price is not null
+            and i.sell_price >= 500
+            and l.cost_each_ < i.sell_price
+            and torndatetime >= "2025-04-20"
+            ) as pp
+            group by 1
+            order by 1 desc""",
+    'sameassellprice':"""
+         SELECT b.player_id, b.player_name, b.quantity, i.name,  b.price 
+        FROM bazaar b
+        left join item i on b.item_id = i.item_id 
+        where i.sell_price = b.price
+        and i.sell_price > 5000
+        order by 5 desc, 2
+        limit 300""" ,
+    'lessthan200':"""
+        SELECT b.player_id, b.player_name, b.quantity, i.name,  b.price , i.type
+        FROM bazaar b
+        left join item i on b.item_id = i.item_id 
+        where b.price <= 200
+        and i.type != 'Weapon'
+        order by 5 desc , 3 desc
+        limit 300""" ,
+    'lessthan200group':"""
+        SELECT b.player_id, b.player_name, count(*) as totalitems, sum(b.quantity) as totalquantity
+        FROM bazaar b
+        left join item i on b.item_id = i.item_id 
+        where b.price <= 200
+        and i.type != 'Weapon'
+        group by 1,2
+        order by 4
+        limit 300""" ,
+    'threadstatus':"""
+        SELECT status, count(*) as total from threadstatus group by 1;""" ,
+    'bazaarstatus':"""
+        SELECT count(distinct item_id) as total_itemid , count(distinct player_id) as total_playerid from bazaar ;""" ,
     }
 
 

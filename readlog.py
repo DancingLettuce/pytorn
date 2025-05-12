@@ -23,6 +23,7 @@ parser.add_argument("--truncatereference", action="store_true",  help="Reload an
 parser.add_argument("--truncateplayerprofile", action="store_true",  help="Delete and re-create the playerprofile table.")
 parser.add_argument("--truncatecompany", action="store_true",  help="reload company details")
 parser.add_argument("--truncateitem", action="store_true",  help="reload item details")
+parser.add_argument("--truncatethreadstatus", action="store_true",  help="recreate threadstatus table")
 parser.add_argument("--itemstotrack", help="Comma separated item IDs to track. Stored after first use.")
 parser.add_argument("--nolog", action="store_true",  help="Skip checking the log and downloading")
 parser.add_argument("--getmarketprices", action="store_true",  help="Get the prices for the itemstotrack")
@@ -33,6 +34,7 @@ parser.add_argument("--getfaction",   help="Get faction members")
 parser.add_argument("--getbazaar",   help="Get bazaar for a given user")
 parser.add_argument("--getbazaarfile",   help="Get bazaars for all users in INFILE")
 parser.add_argument("--getmarketfile",   help="Get market for all items in INFILE")
+parser.add_argument("--getmonitorpricefile",   help="Get market monitor price for all items in INFILE")
 parser.add_argument("--truncatebazaar", action="store_true",  help="reload bazaar details")
 parser.add_argument("--readtextfiles", action="store_true",  help="Get Player ID etc from text files")
 parser.add_argument("--outfile",   help="Export output to file")
@@ -324,8 +326,11 @@ def init_database():
         execute_sql("DROP TABLE IF EXISTS logtype")
         execute_sql("DROP TABLE IF EXISTS logcategory")
         execute_sql("DROP TABLE IF EXISTS company")
+        execute_sql("DROP TABLE IF EXISTS threadstatus")
     if args.truncatecompany:
         execute_sql("DROP TABLE IF EXISTS company")
+    if args.truncatethreadstatus:
+        execute_sql("DROP TABLE IF EXISTS threadstatus")
     if args.truncatebazaar:
         execute_sql("DROP TABLE IF EXISTS bazaar")
     if args.truncateitem:
@@ -347,7 +352,9 @@ def init_database():
         buy_price INTEGER, sell_price INTEGER, market_price INTEGER,
         circulation INTEGER, category TEXT, stealth_level INTEGER,
         label TEXT DEFAULT '',
-        monitorprice INTEGER  )""")
+        monitorprice INTEGER, last_sellprice INTEGER , last_buyprice INTEGER )""")
+    execute_sql("""CREATE TABLE IF NOT EXISTS threadstatus (id INTEGER PRIMARY KEY, updated_on TEXT, 
+        item_id INTEGER UNIQUE, status TEXT , statuscount INTEGER )""")
     execute_sql("CREATE INDEX IF NOT EXISTS idxitm_item_id ON item (item_id)")
     execute_sql("""CREATE TABLE IF NOT EXISTS playerprofile (id INTEGER PRIMARY KEY, 
         attackingattackswon INTEGER,
@@ -471,8 +478,12 @@ def init_database():
         playerlastinteraction TEXT
     )""")
     execute_sql("CREATE INDEX IF NOT EXISTS idxpl_player_id ON playerprofile (playerid)")
-    execute_sql("""CREATE TABLE IF NOT EXISTS bazaar (id INTEGER PRIMARY KEY, player_id INTEGER , 
-        updateon TEXT, item_id INTEGER, name TEXT, type TEXT, quantity INTEGER, price INTEGER, market_price INTEGER, sell_price INTEGER)""")
+    execute_sql("""CREATE TABLE IF NOT EXISTS bazaar (id INTEGER PRIMARY KEY, player_id INTEGER , player_name TEXT, 
+        api TEXT,
+        bazaarupdated_unix INTEGER, 
+        bazaarupdated_iso TEXT,
+        updateon TEXT, item_id INTEGER, name TEXT, type TEXT, quantity INTEGER, price INTEGER, 
+        market_price INTEGER, sell_price INTEGER)""")
     execute_sql("CREATE INDEX IF NOT EXISTS idxbz_item_id ON bazaar (item_id)")
     execute_sql("CREATE INDEX IF NOT EXISTS idxbz_player_id ON bazaar (player_id)")
     
@@ -778,6 +789,18 @@ def main():
     if args.showsecrets:
         #python3 readlog.py --showsecrets
         print(f"Secrets: {secrets}")
+
+    if args.getmonitorpricefile:
+        with open(args.getmonitorpricefile, newline='') as csvfile:
+            reader = csv.DictReader(csvfile,delimiter='\t')
+            sql= """UPDATE item SET monitorprice = ? where item_id = ?"""
+            for row in reader:
+                print(row)
+                params = (row['monitorprice'], row['item_id'])
+                execute_sql(sql=sql, args=params, many=False)
+
+
+
 
     if args.getmarketprices or args.getmarketfile:
         #python3 readlog.py --getmarketprices
