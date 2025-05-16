@@ -13,10 +13,10 @@ import csv
 import library
 # v22
 #
-    # sqlite viewer online with export-to-csv https://inloop.github.io/sqlite-viewer/
+    # sqlite sql command online with export-to-csv https://inloop.github.io/sqlite-viewer/
     # sqlite viewer with refresh https://sqliteviewer.app/#/pytorn.db/table/userlog/
     # json viewer https://jsonformatter.org/
-
+ 
  
 parser = argparse.ArgumentParser()
 parser.add_argument("-api", "--apikey", help="Api key. Stored after first use")
@@ -27,6 +27,7 @@ parser.add_argument("--truncateitem", action="store_true",  help="reload item de
 parser.add_argument("--truncatethreadstatus", action="store_true",  help="recreate threadstatus table")
 parser.add_argument("--truncatemarket", action="store_true",  help="recreate threadstatus table")
 parser.add_argument("--truncatebazaar", action="store_true",  help="reload bazaar details")
+parser.add_argument("--truncatebazaarstatus", action="store_true",  help="reload bazaar details")
 parser.add_argument("--nolog", action="store_true",  help="Skip checking the log and downloading")
 parser.add_argument("--debug", action="store_true",  help="Show detailed tracing log")
 parser.add_argument("--debugsql", action="store_true",  help="Show SQLite execution")
@@ -35,6 +36,8 @@ parser.add_argument("--dbage",   help="API refreshed if age > dbage. Default = 3
 parser.add_argument("--showsecrets", action="store_true",  help="show the secrets")
 parser.add_argument("--dryrun", action="store_true",  help="Do a run using the last 100 log entries in the base API")
 parser.add_argument("--logstart",   help="Timestamp to go back to")
+parser.add_argument("--getmonitorpricefile",   help="Get market monitor price for all items in INFILE")
+
 
 args = parser.parse_args()
 library.args = args
@@ -52,7 +55,6 @@ library.dlog = dlog
 if args.debugsql:
     # trace calls
     library.dbcon.set_trace_callback(print)
-
     
 def get_me():
     section = 'user'
@@ -67,8 +69,6 @@ def get_me():
 def get_log():
     res=library.get_api(section='user',selections='log')
     return res
-
-
 
 def get_log_createevnet():
     accountcreatelog=library.get_api(section='user',selections='log', cat='1')
@@ -136,7 +136,7 @@ def checkinit():
             print(f"ERROR: apikey not found in secrets {e}")
             return False
     return True
-
+ 
 def init_database():
     Path('textfiles').mkdir(parents=False, exist_ok=True)
     if args.truncateplayerprofile:
@@ -157,11 +157,14 @@ def init_database():
         library.execute_sql("DROP TABLE IF EXISTS bazaar")
     if args.truncateitem:
         library.execute_sql("DROP TABLE IF EXISTS item")
+    if args.truncatebazaarstatus:
+        print(f"Truncating bazaarstatus")
+        library.execute_sql("DROP TABLE IF EXISTS bazaarstatus")
     #dbcon.execute("DROP TABLE userlog")
     library.execute_sql("""CREATE TABLE IF NOT EXISTS userlog (id INTEGER PRIMARY KEY, log_id TEXT UNIQUE, log_type TEXT, title TEXT, 
         timestamp INTEGER, torndatetime TEXT,
         data TEXT, params TEXT )""")
-    library.execute_sql("""CREATE TABLE IF NOT EXISTS market (id INTEGER PRIMARY KEY, item_id INTEGER UNIQUE, price INTEGER, quantity INTEGER )""")
+    library.execute_sql("""CREATE TABLE IF NOT EXISTS market (id INTEGER PRIMARY KEY, item_id INTEGER, price INTEGER, quantity INTEGER )""")
     library.execute_sql("""CREATE TABLE IF NOT EXISTS logtype (id INTEGER PRIMARY KEY, logtype_id INTEGER UNIQUE, title TEXT )""")
     library.execute_sql("""CREATE TABLE IF NOT EXISTS logcategory (id INTEGER PRIMARY KEY, logcategory_id INTEGER UNIQUE, title TEXT )""")
     library.execute_sql("CREATE INDEX IF NOT EXISTS idxlc_logcategory_id ON logcategory (logcategory_id)")
@@ -298,8 +301,14 @@ def init_database():
         lastactionrelative TEXT,
         profileupdateon TEXT,
         statsupdatedon TEXT,
-        playerlastinteraction TEXT
+        playerlastinteraction TEXT,
+        updateon TEXT,
+        profileimage TEXT,
+        basiciconsicon27 TEXT,
+        basiciconsicon9 TEXT,
+        basiciconsicon35 TEXT
     )""")
+    # icon 27=company, 9 = faction, 35=bazaar
     library.execute_sql("CREATE INDEX IF NOT EXISTS idxpl_player_id ON playerprofile (playerid)")
     library.execute_sql("""CREATE TABLE IF NOT EXISTS bazaar (id INTEGER PRIMARY KEY, player_id INTEGER , player_name TEXT, 
         api TEXT,
@@ -309,6 +318,18 @@ def init_database():
         market_price INTEGER, sell_price INTEGER)""")
     library.execute_sql("CREATE INDEX IF NOT EXISTS idxbz_item_id ON bazaar (item_id)")
     library.execute_sql("CREATE INDEX IF NOT EXISTS idxbz_player_id ON bazaar (player_id)")
+    library.execute_sql("""CREATE TABLE IF NOT EXISTS bazaarstatus 
+        (id INTEGER PRIMARY KEY, player_id INTEGER UNIQUE, player_name TEXT, 
+        lastseen_1dollar TEXT default '',
+        lastseen_profit TEXT default '',
+        lastseen_lowcost TEXT default '',
+        updateon TEXT default '', 
+        is_priority TEXT DEFAULT 'false',
+        is_ignore TEXT DEFAULT '',
+        itemcount INTEGER default 0,
+        lastseen_belowmonitor TEXT default ''
+        )""")
+    library.execute_sql("CREATE INDEX IF NOT EXISTS idxbzst_player_id ON bazaarstatus (player_id)")
     
     res = library.get_cur(sql='SELECT count(*) FROM logtype').fetchone()
     rowcount = 0
@@ -367,7 +388,7 @@ def init_database():
             library.print_flush(f"{rowcount} {value['name']}")
             value_param = []
             value_param.append(value['id'])
-            value_param.append(datetime.now().isoformat())
+            value_param.append(datetime.utcnow().isoformat())
             value_param.append(value['name'])
             value_param.append(value['description'])
             value_param.append(value['effect'])
@@ -582,6 +603,14 @@ def main():
         #python3 readlog.py --showsecrets
         print(f"Secrets: {secrets}")
 
+    if args.getmonitorpricefile:
+        with open(args.getmonitorpricefile, newline='') as csvfile:
+            reader = csv.DictReader(csvfile,delimiter='\t')
+            sql= """UPDATE item SET monitorprice = ? where item_id = ?"""
+            for row in reader:
+                print(row)
+                params = (row['monitorprice'], row['item_id'])
+                library.execute_sql(sql=sql, args=params, many=False)
         
     
     timediff = (datetime.now() - library.timestart).total_seconds() / 60

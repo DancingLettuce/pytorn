@@ -2,6 +2,7 @@ from datetime import datetime
 from pathlib import Path
 import json
 import requests #sudo apt-get install python3-requests
+from requests.packages.urllib3.exceptions import InsecureRequestWarning
 
 timestart = None 
 apicount = None
@@ -32,12 +33,14 @@ class debuglog():
             print(line)
 
 def get_api(section, selections='', cat='', ts_to='', ts_from='', id='', slug='', urlbreadcrumb='', version=2):
+    requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
     global apicount
     global timestart
     timediff = (datetime.now() - timestart).total_seconds() / 60
     if apicount / timediff >= 90:
-        print(f"Pausing for {'5' if args.sleep is None else args.sleep} seconds")
-        time.sleep(5 if args.sleep is None else float(args.sleep))
+        pass
+        #print(f"Pausing for {'5' if args.sleep is None else args.sleep} seconds")
+        #time.sleep(5 if args.sleep is None else float(args.sleep))
     headers = None
     if version == 1:
         apiurl_v1 = 'https://api.torn.com/'
@@ -63,21 +66,26 @@ def get_api(section, selections='', cat='', ts_to='', ts_from='', id='', slug=''
         (f"ts_from={timestamptodate(ts_from)}" if ts_from else '') + 
         (f"ts_to={timestamptodate(ts_to)}" if ts_to else '') )
     #print(f"{apicount} Calling api v{version} {apiendpoint}")
-    response = requests.get(apiendpoint, headers = headers)
+    response = requests.get(apiendpoint, headers = headers, verify=False)
+    
     apicount += 1
     timediff = (datetime.now() - timestart).total_seconds() / 60
     dlog.debug(f"Api called {apicount} times. Started {timestart} duration {timediff} minutes. Approximately {apicount / timediff} API per minute.")
     #print("got response")
     dlog.debug(f"Response code is {response}")
     meme = None
+    if response.status_code != 200:
+        print(f"Error {apiendpoint} {response}")
+    
     try:
         meme = response.json()
+        
     except Exception as e:
         print(f"Error {response} calling api {apiendpoint} {e}")
         return None
     dlog.debug(f">Got api response {meme}")
     return meme
-     
+      
 def flatten_json(y,cleankey=False, delimiter = '.', name=''):
     out = {}
     def flatten(x, name=name):
@@ -129,12 +137,13 @@ def execute_sql(sql, args=None, many=False):
     #print(args)
     dlog.debug(f"Executing {sql} argcount={len(args) if args is not None else None} {many}")
     if args is None:
-        dbcon.execute(sql)
+        cur = dbcon.execute(sql)
     elif many:
-        dbcon.executemany(sql, args)
+        cur = dbcon.executemany(sql, args)
     else:
-        dbcon.execute(sql, args)
+        cur = dbcon.execute(sql, args)
     dbcon.commit()
+    return cur
 
 def timestamptodate(ts):
     if ts:
@@ -143,8 +152,10 @@ def timestamptodate(ts):
     else:
         return None
 
-def get_cur(sql, args=None):
+def get_cur(sql, args=None,rowfactory=None):
     cur = dbcon.cursor()
+    if rowfactory:
+        cur.row_factory = sqlite3.Row
     dlog.debug(f"get_cur {sql} {args}")
     if args:
         return(cur.execute(sql, args))
@@ -157,3 +168,5 @@ def get_cur_list(sql):
     #cur.row_factory = sqlite3.Row
     cur.row_factory = lambda cursor, row: row[0]
     return(cur.execute(sql).fetchall())
+
+        

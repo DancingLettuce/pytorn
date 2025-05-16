@@ -123,15 +123,22 @@ SQLPREPARED={'allitems':"SELECT item_id, name, sell_price , label, monitorprice,
             FROM userlog as l
             LEFT JOIN item i ON l.i0id_ = i.item_id
             WHERE l.log_type in (1225,4201,1112)
-            and name like "%?%" 
+            and name like "%?%"  
             order by l.timestamp desc 
             LIMIT 20""",
-    'marketpriceparam':"""SELECT b.player_id, b.player_name, i.name, b.quantity, b.price , 
+    'marketpriceparamprofit':"""SELECT b.player_id, i.name, b.quantity, b.price , 
         (i.sell_price - b.price) * b.quantity as profit
         FROM bazaar b
         left join item i on b.item_id = i.item_id 
         where i.name like '%?%' 
+        and b.price >1
         order by 5 desc""",
+    'marketpriceparam':"""SELECT b.player_id, i.name, b.quantity, b.price 
+        FROM bazaar b
+        left join item i on b.item_id = i.item_id 
+        where i.name like '%?%' 
+        and b.price >1
+        order by 4 desc,3 desc""",
     'allpriceparam':"""SELECT 
         --l.torndatetime, 
         substr(l.torndatetime,1,10) as datetime,
@@ -181,6 +188,30 @@ SQLPREPARED={'allitems':"SELECT item_id, name, sell_price , label, monitorprice,
             OR b.price <= i.monitorprice)
         group by 1,2,3
         order by 4 """ ,
+    'bazaargroup':"""SELECT b.player_id, 
+        sum((i.sell_price - b.price) * b.quantity) as profit, count(*) as total
+        FROM bazaar b
+        left join item i on b.item_id = i.item_id 
+        where ( (i.sell_price - b.price) * b.quantity >= 500
+            OR b.price <= i.monitorprice)
+        group by 1
+        order by 2 ;""",
+    ##
+    'bazaarprofit':"""SELECT b.player_id,  i.name, b.quantity, b.price , 
+        (i.sell_price - b.price) * b.quantity as profit
+        FROM bazaar b
+        left join item i on b.item_id = i.item_id 
+        where ( (i.sell_price - b.price) * b.quantity >= 500
+            OR b.price <= i.monitorprice)
+            and b.price > 1
+        order by 5 """,
+    'itemmarket':"""SELECT i.name, m.price, m.quantity, (i.sell_price - m.price) * m.quantity as profit
+        FROM market m 
+        left join item i on m.item_id = i.item_id
+        WHERE  (i.sell_price - m.price ) * m.quantity >= 500
+        or m.price <=200 
+        order by 4 
+        """,
     'marketprofitmarket':"""
             SELECT b.player_id, b.player_name, i.name, b.quantity, b.price ,
         (i.last_sellprice - b.price) * b.quantity as profit, '[' || i.last_sellprice 
@@ -309,6 +340,7 @@ def main():
 
     if args.sqlprepared and args.param1:
         SQLPREPARED[args.sqlprepared] = SQLPREPARED[args.sqlprepared].replace('?', args.param1)
+    summaryformat = []
     if args.outfile:
         if 'csv' in args.outfile:
             if args.sqlprepared:
@@ -321,12 +353,22 @@ def main():
                     csvwriter.writerow(fields)
                     for row in res:
                         csvwriter.writerow(row)
+                        if args.sqlprepared == 'bazaarprofit':
+                            summaryformat .append(f"https://www.torn.com/bazaar.php?userId={row[0]}#/ {row[1]} = ${row[4]} profit")
                         #print(row)
-                        print(",".join(map(lambda x: "" if x is None else str(x),row)))
+                        mm = ''
+                        if fields[0] in ('player_id'):
+                            mm = f"https://www.torn.com/bazaar.php?userId={row[0]}#/"
+
+                        print(mm + "  " + ",".join(map(lambda x: "" if x is None else str(x),row)))
                 print(f"Output written to {args.outfile} as CSV")
+                for row in summaryformat:
+                    print(row)
+                
+
         elif 'html' in args.outfile:
             if args.sqlprepared:
-                res = get_cur(SQLPREPARED[args.sqlprepared], rowfactory='row')
+                res = get_cur(SQLPREPARED[args.sqlprepared], rowfactory='row') 
                 fields = [col[0] for col in res.description]
                 with open(args.outfile, 'w', newline='') as outf:
                     outf.write('<HTML>\n')
