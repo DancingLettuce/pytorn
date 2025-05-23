@@ -11,12 +11,11 @@ import re
 import time
 import csv
 import library
-# v22
+# v23
 #
     # sqlite sql command online with export-to-csv https://inloop.github.io/sqlite-viewer/
     # sqlite viewer with refresh https://sqliteviewer.app/#/pytorn.db/table/userlog/
     # json viewer https://jsonformatter.org/
- 
  
 parser = argparse.ArgumentParser()
 parser.add_argument("-api", "--apikey", help="Api key. Stored after first use")
@@ -38,7 +37,6 @@ parser.add_argument("--dryrun", action="store_true",  help="Do a run using the l
 parser.add_argument("--logstart",   help="Timestamp to go back to")
 parser.add_argument("--getmonitorpricefile",   help="Get market monitor price for all items in INFILE")
 
-
 args = parser.parse_args()
 library.args = args
 secrets = {}
@@ -48,7 +46,6 @@ library.dbcon = dbcon
 apicount = 0
 library.apicount = 0
 library.timestart = datetime.now()
-
 dlog = library.debuglog()
 library.dlog = dlog
 
